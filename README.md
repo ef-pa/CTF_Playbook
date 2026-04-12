@@ -22,7 +22,7 @@ and organizes everything into a technique-based playbook designed to help solve 
 
 ## Key Design Decisions
 
-- **Organized by technique, not CTF category.** A heap exploit and a format string bug are both "pwn" but have totally different solve paths. The playbook groups by what-you-actually-do.
+- **Organized by technique within categories.** A heap exploit and a format string bug are both "pwn" but have totally different solve paths. The playbook groups by what-you-actually-do, with optional sub-techniques for finer granularity (e.g., XSS splits into reflected, stored, DOM).
 - **SQLite as the central index.** Every writeup has a `fetch_status` and `class_status` so you can resume any stage. Content-hash deduplication detects the same writeup found via different sources.
 - **Taxonomy is defined in `ctf_playbook/taxonomy.py`** as a dict. The classifier maps writeups into this taxonomy but can also discover new technique slugs not in the original list.
 - **Layered architecture.** Configuration, taxonomy data, data access (db), and service logic (classify, build, fetch) are separated so a GUI or API can reuse the same services without importing CLI code.
@@ -37,9 +37,9 @@ CTF_Playbook/
 │   ├── __init__.py
 │   ├── __main__.py
 │   ├── config.py                     # Settings: paths, API keys, rate limits
-│   ├── taxonomy.py                   # Technique taxonomy data + lookup helpers
-│   ├── models.py                     # Shared dataclasses (ClassificationResult, etc.)
-│   ├── db.py                         # SQLite schema, init, query/insert helpers
+│   ├── taxonomy.py                   # Technique taxonomy (categories, techniques, sub-techniques)
+│   ├── models.py                     # Dataclasses (TechniqueMatch, ClassificationResult, etc.)
+│   ├── db.py                         # SQLite schema, CRUD, sub-technique tracking
 │   ├── cli.py                        # Click CLI orchestrator
 │   ├── scrapers/
 │   │   ├── __init__.py
@@ -48,15 +48,15 @@ CTF_Playbook/
 │   └── services/
 │       ├── __init__.py
 │       ├── fetcher.py                # URL fetcher with per-domain rate limiting
-│       ├── classifier.py             # Anthropic API integration, classification prompt
-│       └── builder.py                # Playbook folder/pattern/recon-pattern generator
+│       ├── classifier.py             # LLM classification with hierarchical technique output
+│       └── builder.py                # Playbook + sub-technique file generation
 ├── tests/                            # pytest suite
-│   ├── test_config.py
-│   ├── test_db.py
+│   ├── test_config.py                # Taxonomy structure + sub-technique tests
+│   ├── test_db.py                    # CRUD, sub-technique tracking, soft reset tests
 │   ├── test_fetcher.py
 │   └── test_github_parser.py
 └── playbook/                         # Output (generated at runtime, gitignored)
-    ├── techniques/
+    ├── techniques/                   # category/technique/_pattern.md + sub-technique .md files
     ├── recon-patterns/
     ├── toolchains/
     └── raw-writeups/
@@ -94,13 +94,18 @@ uv run ctf-playbook classify --limit 100        # Classify up to 100 writeups
 uv run ctf-playbook classify --category pwn     # Only classify pwn challenges
 
 # Utilities
-uv run ctf-playbook stats           # Database statistics
+uv run ctf-playbook stats           # Database statistics (includes sub-technique breakdown)
 uv run ctf-playbook search "heap"   # Search classified writeups by keyword
 uv run ctf-playbook search -t buffer-overflow   # Filter by technique
 uv run ctf-playbook search --tool gdb           # Filter by tool
 uv run ctf-playbook dedup           # Remove duplicate writeups (by content hash)
 uv run ctf-playbook clean           # Purge junk content from fetched writeups
 uv run ctf-playbook fix-categories  # Backfill challenge categories from technique data
+
+# Sub-technique management
+uv run ctf-playbook promote         # Review and promote discovered sub-techniques
+uv run ctf-playbook promote --threshold 5   # Require 5+ occurrences
+uv run ctf-playbook soft-reset      # Reset classifications for re-classification
 ```
 
 ## Testing
@@ -117,14 +122,45 @@ uv run pytest
 
 ## Taxonomy Design
 
-The playbook is organized by **technique** (what you do to solve it), not by CTF category.
-This means a "pwn" challenge using heap exploitation and a "pwn" challenge using format
-strings live in different technique branches, because the solve paths are different.
+The playbook is organized by **technique** (what you do to solve it), grouped under top-level
+categories. This means a "pwn" challenge using heap exploitation and a "pwn" challenge using
+format strings live in different technique branches, because the solve paths are different.
 
-Each technique folder contains:
-- `_pattern.md` — generalized recognition signals + solve flow
-- Individual writeup notes linking to raw sources
-- Tags for CTF category, difficulty, tools used, event
+### Hierarchy
+
+The taxonomy has up to 3 levels: **category / technique / sub-technique**.
+
+```
+playbook/techniques/
+  cryptography/
+    rsa-attacks/
+      _pattern.md              # Technique overview + sub-technique table
+      coppersmith.md           # Sub-technique pattern file
+      wiener.md
+      hastad.md
+    padding-oracle/
+      _pattern.md              # No sub-techniques — just the overview
+  web/
+    xss/
+      _pattern.md
+      reflected-xss.md
+      stored-xss.md
+      dom-xss.md
+```
+
+- `_pattern.md` — technique overview with recognition signals, tools, solve flow, and examples
+- `{sub-technique}.md` — same structure, scoped to a specific sub-technique
+- Not all techniques have sub-techniques — most are just `_pattern.md`
+
+### Sub-Technique Discovery
+
+Sub-techniques come from two sources:
+1. **Seeded** — predefined in the taxonomy (e.g., RSA attack variants, XSS types)
+2. **Discovered** — the classifier identifies new sub-techniques during classification
+
+Discovered sub-techniques are tracked in the database with occurrence counts. Once a
+sub-technique appears in 3+ writeups, it becomes a **promotion candidate**. Use
+`ctf-playbook promote` to review and approve candidates.
 
 Recon-pattern files provide the reverse lookup: from what you observe in a challenge
 to which technique to try first.
