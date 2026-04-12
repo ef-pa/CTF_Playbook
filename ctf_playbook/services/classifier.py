@@ -7,9 +7,21 @@ and stores the extracted metadata back in the database.
 import json
 from pathlib import Path
 
-from anthropic import Anthropic
+from anthropic import Anthropic, APIConnectionError, APITimeoutError, RateLimitError
+from anthropic import AuthenticationError, InternalServerError
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn
+
+
+# Transient errors — the writeup itself is fine, the API is temporarily unavailable.
+# These should NOT mark the writeup as failed.
+_TRANSIENT_ERRORS = (APIConnectionError, APITimeoutError, RateLimitError,
+                     AuthenticationError, InternalServerError)
+
+
+class TransientAPIError(Exception):
+    """Raised when the API fails for a reason unrelated to the writeup content."""
+    pass
 
 from ctf_playbook.config import ANTHROPIC_API_KEY, CLASSIFIER_MODEL, CLASSIFIER_MAX_TOKENS
 from ctf_playbook.taxonomy import TAXONOMY, TECHNIQUE_TO_CATEGORY, get_category, all_sub_slugs
@@ -129,10 +141,12 @@ Analyze this writeup and extract the technique information as JSON."""
 
     except json.JSONDecodeError as e:
         console.print(f"  [yellow]JSON parse error:[/] {e}")
-        return None
+        return None  # permanent — the LLM returned unparseable output
+    except _TRANSIENT_ERRORS as e:
+        raise TransientAPIError(str(e)) from e
     except Exception as e:
-        console.print(f"  [red]API error:[/] {e}")
-        return None
+        console.print(f"  [red]Unexpected error:[/] {e}")
+        return None  # permanent — unknown issue with this specific writeup
 
 
 def run(limit: int = 100, category: str = None):
@@ -153,6 +167,9 @@ def run(limit: int = 100, category: str = None):
 
         success = 0
         failed = 0
+        skipped = 0
+        consecutive_transient = 0
+        max_consecutive_transient = 3
 
         with Progress(SpinnerColumn(),
                       TextColumn("[progress.description]{task.description}"),
@@ -179,7 +196,28 @@ def run(limit: int = 100, category: str = None):
                     progress.update(task, advance=1)
                     continue
 
-                result = classify_writeup(content, challenge_name, cat)
+                try:
+                    result = classify_writeup(content, challenge_name, cat)
+                except TransientAPIError as e:
+                    # API is down, rate limited, or out of credits.
+                    # Leave the writeup as 'pending' so it gets retried next run.
+                    consecutive_transient += 1
+                    skipped += 1
+                    console.print(f"  [yellow]API unavailable:[/] {e}")
+
+                    if consecutive_transient >= max_consecutive_transient:
+                        console.print(
+                            f"\n[red]Stopping:[/] {consecutive_transient} consecutive "
+                            f"API failures — likely out of credits or rate limited. "
+                            f"Remaining writeups left as pending for next run."
+                        )
+                        break
+
+                    progress.update(task, advance=1)
+                    continue
+
+                # Reset transient counter on any non-transient outcome
+                consecutive_transient = 0
 
                 if result:
                     mark_classified(
@@ -222,6 +260,7 @@ def run(limit: int = 100, category: str = None):
                         f"  [dim]{challenge_name}[/] -> [cyan]{techs}[/]"
                     )
                 else:
+                    # Permanent failure (bad content, unparseable LLM output)
                     mark_class_failed(conn, writeup_id)
                     failed += 1
 
@@ -230,7 +269,12 @@ def run(limit: int = 100, category: str = None):
                     description=f"Classifying... ({success} ok, {failed} failed)"
                 )
 
-        console.print(f"\n[green]Done![/] Classified {success}, failed {failed}")
+        parts = [f"Classified {success}"]
+        if failed:
+            parts.append(f"failed {failed}")
+        if skipped:
+            parts.append(f"skipped {skipped} (will retry)")
+        console.print(f"\n[green]Done![/] {', '.join(parts)}")
 
 
 if __name__ == "__main__":
