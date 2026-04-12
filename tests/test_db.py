@@ -15,7 +15,10 @@ from ctf_playbook.db import (
     infer_category, backfill_categories, backfill_challenge_category,
     find_duplicates, deduplicate,
     search_writeups, get_stats,
+    record_sub_technique, get_promotion_candidates,
+    promote_sub_technique, soft_reset_classifications,
 )
+from ctf_playbook.models import TechniqueMatch
 from ctf_playbook.taxonomy import TECHNIQUE_TO_CATEGORY
 
 
@@ -399,3 +402,184 @@ class TestStats:
         s = get_stats(db)
         assert s["writeups_fetched"] == 1
         assert s["writeups_pending_class"] == 1
+
+
+# ── Sub-technique tables ──────────────────────────────────────────────────
+
+class TestSubTechniqueTables:
+    def test_tables_exist(self, db):
+        tables = {row[0] for row in db.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()}
+        assert "taxonomy_nodes" in tables
+        assert "writeup_techniques" in tables
+
+    def test_mark_classified_with_technique_match(self, db):
+        """TechniqueMatch objects populate the writeup_techniques join table."""
+        _, _, wid = _seed(db)
+        mark_fetched(db, wid, "/tmp/raw.md")
+        techniques = [
+            TechniqueMatch("rsa-attacks", "wiener"),
+            TechniqueMatch("buffer-overflow"),
+        ]
+        mark_classified(db, wid,
+                        techniques=techniques,
+                        tools_used=["gdb"], solve_steps=["step1"],
+                        recognition=["signal1"], difficulty="medium")
+
+        rows = db.execute(
+            "SELECT technique, sub_technique FROM writeup_techniques WHERE writeup_id=?",
+            (wid,)
+        ).fetchall()
+        assert len(rows) == 2
+
+        rsa_row = [r for r in rows if r["technique"] == "rsa-attacks"][0]
+        assert rsa_row["sub_technique"] == "wiener"
+
+        bo_row = [r for r in rows if r["technique"] == "buffer-overflow"][0]
+        assert bo_row["sub_technique"] is None
+
+    def test_mark_classified_with_plain_strings(self, db):
+        """Plain string lists still work (backward compat)."""
+        _, _, wid = _seed(db)
+        mark_fetched(db, wid, "/tmp/raw.md")
+        mark_classified(db, wid,
+                        techniques=["buffer-overflow", "rop-chains"],
+                        tools_used=[], solve_steps=[], recognition=[],
+                        difficulty="easy")
+
+        rows = db.execute(
+            "SELECT technique, sub_technique FROM writeup_techniques WHERE writeup_id=?",
+            (wid,)
+        ).fetchall()
+        assert len(rows) == 2
+        assert all(r["sub_technique"] is None for r in rows)
+
+    def test_mark_classified_json_stores_flat_slugs(self, db):
+        """The JSON techniques column stores flat slugs even with TechniqueMatch."""
+        _, _, wid = _seed(db)
+        mark_fetched(db, wid, "/tmp/raw.md")
+        techniques = [TechniqueMatch("rsa-attacks", "wiener")]
+        mark_classified(db, wid,
+                        techniques=techniques,
+                        tools_used=[], solve_steps=[], recognition=[],
+                        difficulty="easy")
+
+        row = db.execute("SELECT techniques FROM writeups WHERE id=?", (wid,)).fetchone()
+        assert json.loads(row["techniques"]) == ["rsa-attacks"]
+
+    def test_reclassification_clears_old_join_entries(self, db):
+        """Re-classifying a writeup replaces its writeup_techniques rows."""
+        _, _, wid = _seed(db)
+        mark_fetched(db, wid, "/tmp/raw.md")
+        mark_classified(db, wid, techniques=["buffer-overflow"],
+                        tools_used=[], solve_steps=[], recognition=[],
+                        difficulty="easy")
+        # Re-classify with different techniques
+        mark_classified(db, wid, techniques=["rsa-attacks"],
+                        tools_used=[], solve_steps=[], recognition=[],
+                        difficulty="hard")
+
+        rows = db.execute(
+            "SELECT technique FROM writeup_techniques WHERE writeup_id=?",
+            (wid,)
+        ).fetchall()
+        assert len(rows) == 1
+        assert rows[0]["technique"] == "rsa-attacks"
+
+
+# ── Taxonomy node tracking ────────────────────────────────────────────────
+
+class TestTaxonomyNodes:
+    def test_record_sub_technique(self, db):
+        record_sub_technique(db, "wiener", "rsa-attacks", "cryptography")
+        row = db.execute(
+            "SELECT * FROM taxonomy_nodes WHERE slug='wiener'"
+        ).fetchone()
+        assert row["occurrence_count"] == 1
+        assert row["parent_technique"] == "rsa-attacks"
+        assert row["category"] == "cryptography"
+        assert row["source"] == "discovered"
+
+    def test_record_increments_count(self, db):
+        record_sub_technique(db, "wiener", "rsa-attacks", "cryptography")
+        record_sub_technique(db, "wiener", "rsa-attacks", "cryptography")
+        record_sub_technique(db, "wiener", "rsa-attacks", "cryptography")
+        row = db.execute(
+            "SELECT occurrence_count FROM taxonomy_nodes WHERE slug='wiener'"
+        ).fetchone()
+        assert row["occurrence_count"] == 3
+
+    def test_promotion_candidates_below_threshold(self, db):
+        record_sub_technique(db, "wiener", "rsa-attacks", "cryptography")
+        record_sub_technique(db, "wiener", "rsa-attacks", "cryptography")
+        candidates = get_promotion_candidates(db, threshold=3)
+        assert len(candidates) == 0
+
+    def test_promotion_candidates_at_threshold(self, db):
+        for _ in range(3):
+            record_sub_technique(db, "wiener", "rsa-attacks", "cryptography")
+        candidates = get_promotion_candidates(db, threshold=3)
+        assert len(candidates) == 1
+        assert candidates[0]["slug"] == "wiener"
+
+    def test_promote_sub_technique(self, db):
+        for _ in range(3):
+            record_sub_technique(db, "wiener", "rsa-attacks", "cryptography")
+        promote_sub_technique(db, "wiener", "rsa-attacks")
+
+        row = db.execute(
+            "SELECT promoted, promoted_at FROM taxonomy_nodes WHERE slug='wiener'"
+        ).fetchone()
+        assert row["promoted"] == 1
+        assert row["promoted_at"] is not None
+
+    def test_promoted_excluded_from_candidates(self, db):
+        for _ in range(5):
+            record_sub_technique(db, "wiener", "rsa-attacks", "cryptography")
+        promote_sub_technique(db, "wiener", "rsa-attacks")
+
+        candidates = get_promotion_candidates(db, threshold=3)
+        assert len(candidates) == 0
+
+
+# ── Soft reset ────────────────────────────────────────────────────────────
+
+class TestSoftReset:
+    def test_resets_classified_to_pending(self, db):
+        _, _, wid = _seed(db)
+        mark_fetched(db, wid, "/tmp/raw.md")
+        mark_classified(db, wid, techniques=["buffer-overflow"],
+                        tools_used=[], solve_steps=[], recognition=[],
+                        difficulty="easy")
+
+        count = soft_reset_classifications(db)
+        assert count == 1
+
+        row = db.execute("SELECT class_status FROM writeups WHERE id=?", (wid,)).fetchone()
+        assert row["class_status"] == "pending"
+
+    def test_clears_writeup_techniques(self, db):
+        _, _, wid = _seed(db)
+        mark_fetched(db, wid, "/tmp/raw.md")
+        mark_classified(db, wid, techniques=["buffer-overflow"],
+                        tools_used=[], solve_steps=[], recognition=[],
+                        difficulty="easy")
+
+        soft_reset_classifications(db)
+
+        rows = db.execute(
+            "SELECT * FROM writeup_techniques WHERE writeup_id=?", (wid,)
+        ).fetchall()
+        assert len(rows) == 0
+
+    def test_does_not_affect_pending(self, db):
+        _seed(db)  # writeup starts as pending
+        count = soft_reset_classifications(db)
+        assert count == 0
+
+    def test_does_not_affect_failed(self, db):
+        _, _, wid = _seed(db)
+        mark_class_failed(db, wid)
+        count = soft_reset_classifications(db)
+        assert count == 0

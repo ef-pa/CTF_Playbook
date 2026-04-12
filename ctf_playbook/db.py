@@ -87,6 +87,35 @@ def init_db(db_path: Path = DB_PATH):
             CREATE INDEX IF NOT EXISTS idx_challenges_category ON challenges(category);
         """)
 
+        # ── Sub-technique tables (Phase B) ──────────────────────────────────
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS taxonomy_nodes (
+                id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                slug             TEXT NOT NULL,
+                parent_technique TEXT,
+                category         TEXT NOT NULL,
+                source           TEXT NOT NULL DEFAULT 'discovered',
+                occurrence_count INTEGER DEFAULT 0,
+                promoted         INTEGER DEFAULT 0,
+                first_seen_at    TEXT DEFAULT (datetime('now')),
+                promoted_at      TEXT,
+                UNIQUE(slug, parent_technique)
+            );
+
+            CREATE TABLE IF NOT EXISTS writeup_techniques (
+                id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                writeup_id     INTEGER NOT NULL REFERENCES writeups(id),
+                technique      TEXT NOT NULL,
+                sub_technique  TEXT,
+                UNIQUE(writeup_id, technique, sub_technique)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_wt_writeup ON writeup_techniques(writeup_id);
+            CREATE INDEX IF NOT EXISTS idx_wt_technique ON writeup_techniques(technique);
+            CREATE INDEX IF NOT EXISTS idx_wt_sub ON writeup_techniques(sub_technique);
+            CREATE INDEX IF NOT EXISTS idx_tn_slug ON taxonomy_nodes(slug);
+        """)
+
         # Migration: add content_hash column to existing databases
         try:
             conn.execute("ALTER TABLE writeups ADD COLUMN content_hash TEXT")
@@ -212,6 +241,14 @@ def backfill_challenge_category(conn: sqlite3.Connection, writeup_id: int,
 def mark_classified(conn: sqlite3.Connection, writeup_id: int, techniques: list,
                     tools_used: list, solve_steps: list, recognition: list,
                     difficulty: str, notes: str = ""):
+    # Build flat slug list for the JSON column (backward compat)
+    flat_slugs = []
+    for t in techniques:
+        if hasattr(t, "technique"):  # TechniqueMatch
+            flat_slugs.append(t.technique)
+        else:
+            flat_slugs.append(t)
+
     conn.execute("""
         UPDATE writeups SET
             class_status='classified', classified_at=?,
@@ -220,14 +257,80 @@ def mark_classified(conn: sqlite3.Connection, writeup_id: int, techniques: list,
         WHERE id=?
     """, (
         datetime.now(timezone.utc).isoformat(),
-        json.dumps(techniques), json.dumps(tools_used),
+        json.dumps(flat_slugs), json.dumps(tools_used),
         json.dumps(solve_steps), json.dumps(recognition),
         difficulty, notes, writeup_id
     ))
 
+    # Populate writeup_techniques join table
+    conn.execute("DELETE FROM writeup_techniques WHERE writeup_id=?", (writeup_id,))
+    for t in techniques:
+        if hasattr(t, "technique"):  # TechniqueMatch
+            conn.execute("""
+                INSERT OR IGNORE INTO writeup_techniques (writeup_id, technique, sub_technique)
+                VALUES (?, ?, ?)
+            """, (writeup_id, t.technique, t.sub_technique))
+        else:
+            conn.execute("""
+                INSERT OR IGNORE INTO writeup_techniques (writeup_id, technique, sub_technique)
+                VALUES (?, ?, NULL)
+            """, (writeup_id, t))
+
 
 def mark_class_failed(conn: sqlite3.Connection, writeup_id: int):
     conn.execute("UPDATE writeups SET class_status='failed' WHERE id=?", (writeup_id,))
+
+
+# ── Sub-technique tracking ────────────────────────────────────────────────
+
+def record_sub_technique(conn: sqlite3.Connection, slug: str,
+                         parent_technique: str, category: str):
+    """Track a discovered sub-technique. Increments occurrence count on conflict."""
+    conn.execute("""
+        INSERT INTO taxonomy_nodes (slug, parent_technique, category, source, occurrence_count)
+        VALUES (?, ?, ?, 'discovered', 1)
+        ON CONFLICT(slug, parent_technique) DO UPDATE SET
+            occurrence_count = occurrence_count + 1
+    """, (slug, parent_technique, category))
+
+
+def get_promotion_candidates(conn: sqlite3.Connection,
+                             threshold: int = 3) -> list[sqlite3.Row]:
+    """Return discovered sub-techniques with enough occurrences to promote."""
+    return conn.execute("""
+        SELECT slug, parent_technique, category, occurrence_count
+        FROM taxonomy_nodes
+        WHERE source = 'discovered' AND promoted = 0 AND occurrence_count >= ?
+        ORDER BY occurrence_count DESC
+    """, (threshold,)).fetchall()
+
+
+def promote_sub_technique(conn: sqlite3.Connection, slug: str,
+                          parent_technique: str):
+    """Mark a discovered sub-technique as promoted."""
+    conn.execute("""
+        UPDATE taxonomy_nodes SET promoted = 1, promoted_at = ?
+        WHERE slug = ? AND parent_technique = ?
+    """, (datetime.now(timezone.utc).isoformat(), slug, parent_technique))
+
+
+def soft_reset_classifications(conn: sqlite3.Connection) -> int:
+    """Reset all classified writeups to pending for re-classification.
+
+    Clears the writeup_techniques join table for affected rows.
+    Returns the number of writeups reset.
+    """
+    # Clear join table entries for classified writeups
+    conn.execute("""
+        DELETE FROM writeup_techniques WHERE writeup_id IN (
+            SELECT id FROM writeups WHERE class_status = 'classified'
+        )
+    """)
+    cur = conn.execute("""
+        UPDATE writeups SET class_status = 'pending'
+        WHERE class_status = 'classified'
+    """)
+    return cur.rowcount
 
 
 def get_stats(conn: sqlite3.Connection) -> dict:
