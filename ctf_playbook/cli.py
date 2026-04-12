@@ -51,7 +51,7 @@ def scrape(max_events, max_repos, source):
 @click.option("--limit", default=500, help="Max writeups to fetch")
 def fetch(limit):
     """Stage 2: Download writeup content from discovered URLs."""
-    from ctf_playbook.fetcher import run as run_fetcher
+    from ctf_playbook.services.fetcher import run as run_fetcher
     run_fetcher(limit=limit)
 
 
@@ -147,7 +147,7 @@ def fix_categories():
 def clean():
     """Re-check fetched writeups and remove junk (link indexes, too-short content, excluded repos)."""
     from pathlib import Path
-    from ctf_playbook.fetcher import is_useful_writeup
+    from ctf_playbook.services.fetcher import is_useful_writeup
     from ctf_playbook.scrapers.github import EXCLUDED_REPOS
 
     with db_session() as conn:
@@ -314,7 +314,7 @@ def run_all(max_events, max_repos, fetch_limit, classify_limit):
     run_github(max_repos=max_repos)
 
     console.print("\n[bold]Stage 2/4:[/] Fetching content...")
-    from ctf_playbook.fetcher import run as run_fetcher
+    from ctf_playbook.services.fetcher import run as run_fetcher
     run_fetcher(limit=fetch_limit)
 
     console.print("\n[bold]Stage 3/4:[/] Classifying...")

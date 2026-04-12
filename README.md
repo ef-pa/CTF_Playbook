@@ -8,8 +8,8 @@ and organizes everything into a technique-based playbook designed to help solve 
 
 ```
 ┌─────────────┐     ┌──────────────┐     ┌───────────────┐     ┌──────────────┐
-│  1. Scrape   │────▶│  2. Fetch     │────▶│  3. Classify   │────▶│  4. Build    │
-│  (discover)  │     │  (content)   │     │  (taxonomy)    │     │ (playbook)   │
+│  1. Scrape  │───▶│  2. Fetch     │───▶│  3. Classify  │───▶│  4. Build    │
+│  (discover) │     │  (content)   │     │  (taxonomy)   │     │ (playbook)   │
 └─────────────┘     └──────────────┘     └───────────────┘     └──────────────┘
 ```
 
@@ -29,7 +29,7 @@ and organizes everything into a technique-based playbook designed to help solve 
 ## Project Structure
 
 ```
-CTF_Walkthrough/
+CTF_Playbook/
 ├── pyproject.toml
 ├── README.md
 ├── ctf_playbook/                   # Source code

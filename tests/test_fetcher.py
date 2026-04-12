@@ -2,7 +2,7 @@
 
 import hashlib
 
-from ctf_playbook.fetcher import _url_to_filename, is_useful_writeup
+from ctf_playbook.services.fetcher import _url_to_filename, is_useful_writeup
 
 
 class TestUrlToFilename:
