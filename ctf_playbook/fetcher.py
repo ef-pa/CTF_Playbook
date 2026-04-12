@@ -181,7 +181,6 @@ def run(limit: int = 500):
                     # Save to file
                     filename = _url_to_filename(url, challenge_name)
                     filepath = RAW_WRITEUPS_DIR / filename
-                    filepath.write_text(content, encoding="utf-8")
 
                     # Add metadata header
                     header = (
@@ -193,9 +192,13 @@ def run(limit: int = 500):
                         f"year: {row['year']}\n"
                         f"---\n\n"
                     )
-                    filepath.write_text(header + content, encoding="utf-8")
+                    full_content = header + content
+                    filepath.write_text(full_content, encoding="utf-8")
 
-                    mark_fetched(conn, writeup_id, str(filepath))
+                    # Hash the raw content (not header) for dedup
+                    content_hash = hashlib.sha256(content.strip().encode()).hexdigest()
+
+                    mark_fetched(conn, writeup_id, str(filepath), content_hash)
                     success += 1
                 else:
                     mark_fetch_failed(conn, writeup_id)

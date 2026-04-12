@@ -64,9 +64,10 @@ def init_db(db_path: Path = DB_PATH):
                 author          TEXT,
                 team            TEXT,
                 -- Processing status
-                fetch_status    TEXT DEFAULT 'pending',  -- pending / fetched / failed
+                fetch_status    TEXT DEFAULT 'pending',  -- pending / fetched / failed / duplicate
                 raw_path        TEXT,                     -- path to saved content
                 fetched_at      TEXT,
+                content_hash    TEXT,                     -- SHA-256 of fetched content for dedup
                 -- Classification status
                 class_status    TEXT DEFAULT 'pending',  -- pending / classified / failed
                 classified_at   TEXT,
@@ -85,6 +86,13 @@ def init_db(db_path: Path = DB_PATH):
             CREATE INDEX IF NOT EXISTS idx_writeups_source ON writeups(source);
             CREATE INDEX IF NOT EXISTS idx_challenges_category ON challenges(category);
         """)
+
+        # Migration: add content_hash column to existing databases
+        try:
+            conn.execute("ALTER TABLE writeups ADD COLUMN content_hash TEXT")
+        except sqlite3.OperationalError:
+            pass  # column already exists
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_writeups_hash ON writeups(content_hash)")
 
 
 # ── Insert helpers ─────────────────────────────────────────────────────────
@@ -164,11 +172,13 @@ def get_unclassified(conn: sqlite3.Connection, limit: int = 100,
     return conn.execute(query, params).fetchall()
 
 
-def mark_fetched(conn: sqlite3.Connection, writeup_id: int, raw_path: str):
+def mark_fetched(conn: sqlite3.Connection, writeup_id: int, raw_path: str,
+                 content_hash: str = None):
     conn.execute("""
-        UPDATE writeups SET fetch_status='fetched', raw_path=?, fetched_at=?
+        UPDATE writeups SET fetch_status='fetched', raw_path=?, fetched_at=?,
+                            content_hash=?
         WHERE id=?
-    """, (raw_path, datetime.now(timezone.utc).isoformat(), writeup_id))
+    """, (raw_path, datetime.now(timezone.utc).isoformat(), content_hash, writeup_id))
 
 
 def mark_fetch_failed(conn: sqlite3.Connection, writeup_id: int):
@@ -208,9 +218,105 @@ def get_stats(conn: sqlite3.Connection) -> dict:
         ("writeups_pending_fetch", "SELECT COUNT(*) FROM writeups WHERE fetch_status='pending'"),
         ("writeups_pending_class",
          "SELECT COUNT(*) FROM writeups WHERE fetch_status='fetched' AND class_status='pending'"),
+        ("writeups_duplicate",
+         "SELECT COUNT(*) FROM writeups WHERE fetch_status='duplicate'"),
     ]:
         stats[label] = conn.execute(query).fetchone()[0]
     return stats
+
+
+# ── Deduplication ─────────────────────────────────────────────────────────
+
+def find_duplicates(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Find groups of writeups with identical content (by hash)."""
+    return conn.execute("""
+        SELECT content_hash, COUNT(*) as cnt, GROUP_CONCAT(id) as ids
+        FROM writeups
+        WHERE content_hash IS NOT NULL AND fetch_status = 'fetched'
+        GROUP BY content_hash
+        HAVING cnt > 1
+        ORDER BY cnt DESC
+    """).fetchall()
+
+
+def deduplicate(conn: sqlite3.Connection) -> int:
+    """Mark duplicate writeups, keeping the best version of each.
+
+    Priority: classified > fetched, ctftime > github, earliest created.
+    Returns the number of writeups marked as duplicate.
+    """
+    dupes = find_duplicates(conn)
+    removed = 0
+
+    for group in dupes:
+        ids = [int(x) for x in group["ids"].split(",")]
+        placeholders = ",".join("?" * len(ids))
+
+        # Rank: prefer classified, then ctftime source, then earliest
+        rows = conn.execute(f"""
+            SELECT id, class_status, source
+            FROM writeups WHERE id IN ({placeholders})
+            ORDER BY
+                CASE class_status WHEN 'classified' THEN 0 WHEN 'pending' THEN 1 ELSE 2 END,
+                CASE source WHEN 'ctftime' THEN 0 ELSE 1 END,
+                created_at ASC
+        """, ids).fetchall()
+
+        # Keep the first (best), mark the rest as duplicate
+        for row in rows[1:]:
+            conn.execute(
+                "UPDATE writeups SET fetch_status='duplicate' WHERE id=?",
+                (row["id"],)
+            )
+            removed += 1
+
+    return removed
+
+
+# ── Search ────────────────────────────────────────────────────────────────
+
+def search_writeups(conn: sqlite3.Connection, query: str = None,
+                    technique: str = None, tool: str = None,
+                    difficulty: str = None, limit: int = 20) -> list[sqlite3.Row]:
+    """Search classified writeups by text, technique, tool, or difficulty."""
+    conditions = ["w.class_status = 'classified'"]
+    params: list = []
+
+    if technique:
+        conditions.append("w.techniques LIKE ?")
+        params.append(f'%"{technique}"%')
+
+    if tool:
+        conditions.append("w.tools_used LIKE ?")
+        params.append(f"%{tool}%")
+
+    if difficulty:
+        conditions.append("w.difficulty = ?")
+        params.append(difficulty)
+
+    if query:
+        conditions.append("""(
+            w.notes LIKE ? OR w.techniques LIKE ? OR w.tools_used LIKE ?
+            OR w.recognition LIKE ? OR w.solve_steps LIKE ?
+            OR c.name LIKE ? OR e.name LIKE ?
+        )""")
+        q = f"%{query}%"
+        params.extend([q] * 7)
+
+    where = " AND ".join(conditions)
+
+    return conn.execute(f"""
+        SELECT w.id, w.url, w.techniques, w.tools_used, w.solve_steps,
+               w.recognition, w.difficulty, w.notes,
+               c.name as challenge_name, c.category,
+               e.name as event_name, e.year
+        FROM writeups w
+        JOIN challenges c ON w.challenge_id = c.id
+        JOIN events e ON c.event_id = e.id
+        WHERE {where}
+        ORDER BY e.year DESC
+        LIMIT ?
+    """, params + [limit]).fetchall()
 
 
 if __name__ == "__main__":

@@ -13,6 +13,7 @@ Usage:
     python pipeline.py stats                        # Show database stats
 """
 
+import json
 import sys
 
 import click
@@ -87,6 +88,7 @@ def stats():
         table.add_row("Writeups (classified)", str(s["writeups_classified"]))
         table.add_row("Pending fetch", str(s["writeups_pending_fetch"]))
         table.add_row("Pending classification", str(s["writeups_pending_class"]))
+        table.add_row("Duplicates", str(s["writeups_duplicate"]))
 
         console.print(table)
 
@@ -125,6 +127,99 @@ def stats():
                 for tech, count in tech_counter.most_common(20):
                     tech_table.add_row(tech, str(count))
                 console.print(tech_table)
+
+
+@cli.command()
+@click.argument("query", required=False)
+@click.option("--technique", "-t", default=None, help="Filter by technique slug")
+@click.option("--tool", default=None, help="Filter by tool name")
+@click.option("--difficulty", "-d", type=click.Choice(["easy", "medium", "hard", "insane"]),
+              default=None, help="Filter by difficulty")
+@click.option("--limit", default=20, help="Max results to show")
+def search(query, technique, tool, difficulty, limit):
+    """Search classified writeups by keyword, technique, or tool."""
+    from ctf_playbook.db import search_writeups
+
+    if not any([query, technique, tool, difficulty]):
+        console.print("[yellow]Provide a search query or filter (--technique, --tool, --difficulty)[/]")
+        return
+
+    with db_session() as conn:
+        results = search_writeups(conn, query=query, technique=technique,
+                                  tool=tool, difficulty=difficulty, limit=limit)
+
+        if not results:
+            console.print("[yellow]No matching writeups found.[/]")
+            return
+
+        console.print(f"Found [green]{len(results)}[/] matching writeups:\n")
+
+        for row in results:
+            techs = json.loads(row["techniques"]) if row["techniques"] else []
+            tools = json.loads(row["tools_used"]) if row["tools_used"] else []
+            steps = json.loads(row["solve_steps"]) if row["solve_steps"] else []
+            signals = json.loads(row["recognition"]) if row["recognition"] else []
+
+            console.print(f"[bold cyan]{row['challenge_name']}[/] ({row['event_name']} {row['year']})")
+            console.print(f"  Difficulty: [yellow]{row['difficulty'] or '?'}[/]  |  Category: {row['category'] or '?'}")
+            console.print(f"  Techniques: {', '.join(techs)}")
+            if tools:
+                console.print(f"  Tools: {', '.join(tools)}")
+            if signals:
+                console.print(f"  Recognition: {'; '.join(signals)}")
+            if steps:
+                console.print(f"  Solve steps:")
+                for i, step in enumerate(steps, 1):
+                    console.print(f"    {i}. {step}")
+            if row["notes"]:
+                console.print(f"  Summary: [dim]{row['notes']}[/]")
+            console.print(f"  URL: {row['url']}")
+            console.print()
+
+
+@cli.command()
+def dedup():
+    """Find and remove duplicate writeups (by content hash)."""
+    import hashlib
+    from pathlib import Path
+    from ctf_playbook.db import find_duplicates, deduplicate
+
+    with db_session() as conn:
+        # Backfill content hashes for writeups fetched before hashing was added
+        missing = conn.execute("""
+            SELECT id, raw_path FROM writeups
+            WHERE fetch_status='fetched' AND content_hash IS NULL AND raw_path IS NOT NULL
+        """).fetchall()
+
+        if missing:
+            backfilled = 0
+            for row in missing:
+                p = Path(row["raw_path"])
+                if p.exists():
+                    text = p.read_text(encoding="utf-8", errors="replace")
+                    # Strip the YAML frontmatter header before hashing
+                    if text.startswith("---\n"):
+                        end = text.find("---\n", 4)
+                        if end != -1:
+                            text = text[end + 4:].lstrip()
+                    h = hashlib.sha256(text.strip().encode()).hexdigest()
+                    conn.execute("UPDATE writeups SET content_hash=? WHERE id=?", (h, row["id"]))
+                    backfilled += 1
+            console.print(f"Backfilled content hashes for [cyan]{backfilled}[/] writeups")
+
+        dupes = find_duplicates(conn)
+        if not dupes:
+            console.print("[green]No duplicates found![/]")
+            return
+
+        total_dupes = sum(row["cnt"] - 1 for row in dupes)
+        console.print(f"Found [yellow]{len(dupes)}[/] duplicate groups ({total_dupes} redundant writeups)")
+
+        for row in dupes:
+            console.print(f"  Hash {row['content_hash'][:12]}... -> {row['cnt']} copies (ids: {row['ids']})")
+
+        removed = deduplicate(conn)
+        console.print(f"\n[green]Marked {removed} writeups as duplicate[/]")
 
 
 @cli.command(name="all")
