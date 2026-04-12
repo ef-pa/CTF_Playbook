@@ -60,7 +60,7 @@ def fetch(limit):
 @click.option("--category", default=None, help="Only classify this CTF category")
 def classify(limit, category):
     """Stage 3: Classify writeups using LLM analysis."""
-    from ctf_playbook.classifier import run as run_classifier
+    from ctf_playbook.services.classifier import run as run_classifier
     run_classifier(limit=limit, category=category)
 
 
@@ -318,7 +318,7 @@ def run_all(max_events, max_repos, fetch_limit, classify_limit):
     run_fetcher(limit=fetch_limit)
 
     console.print("\n[bold]Stage 3/4:[/] Classifying...")
-    from ctf_playbook.classifier import run as run_classifier
+    from ctf_playbook.services.classifier import run as run_classifier
     run_classifier(limit=classify_limit)
 
     console.print("\n[bold]Stage 4/4:[/] Building playbook...")

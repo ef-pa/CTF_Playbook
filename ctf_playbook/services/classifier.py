@@ -13,6 +13,7 @@ from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn
 
 from ctf_playbook.config import ANTHROPIC_API_KEY, CLASSIFIER_MODEL, CLASSIFIER_MAX_TOKENS
 from ctf_playbook.taxonomy import TAXONOMY, TECHNIQUE_TO_CATEGORY
+from ctf_playbook.models import ClassificationResult
 from ctf_playbook.db import (
     db_session, get_unclassified, mark_classified, mark_class_failed,
     infer_category, backfill_challenge_category,
@@ -20,10 +21,18 @@ from ctf_playbook.db import (
 
 console = Console()
 
-client = Anthropic(api_key=ANTHROPIC_API_KEY) if ANTHROPIC_API_KEY else None
+_client: Anthropic | None = None
 
 
-def _build_taxonomy_reference() -> str:
+def _get_client() -> Anthropic | None:
+    """Lazily create the Anthropic client."""
+    global _client
+    if _client is None and ANTHROPIC_API_KEY:
+        _client = Anthropic(api_key=ANTHROPIC_API_KEY)
+    return _client
+
+
+def build_taxonomy_reference() -> str:
     """Build a text reference of all known techniques for the prompt."""
     lines = []
     for category, info in TAXONOMY.items():
@@ -33,10 +42,12 @@ def _build_taxonomy_reference() -> str:
     return "\n".join(lines)
 
 
-CLASSIFICATION_PROMPT = f"""You are a CTF (Capture The Flag) challenge analyst. Given a writeup of a solved CTF challenge, extract structured information about the solving technique.
+def build_classification_prompt() -> str:
+    """Build the full system prompt for the classifier."""
+    return f"""You are a CTF (Capture The Flag) challenge analyst. Given a writeup of a solved CTF challenge, extract structured information about the solving technique.
 
 ## Known Taxonomy
-{_build_taxonomy_reference()}
+{build_taxonomy_reference()}
 
 ## Your Task
 Analyze the writeup and return a JSON object with these fields:
@@ -52,8 +63,9 @@ Respond with ONLY the JSON object. No markdown fences, no preamble."""
 
 
 def classify_writeup(content: str, challenge_name: str = "",
-                     category: str = "") -> dict | None:
+                     category: str = "") -> ClassificationResult | None:
     """Send a writeup to the LLM for classification."""
+    client = _get_client()
     if not client:
         console.print("[red]No ANTHROPIC_API_KEY set — cannot classify[/]")
         return None
@@ -75,10 +87,11 @@ Original CTF Category: {category or 'unknown'}
 Analyze this writeup and extract the technique information as JSON."""
 
     try:
+        prompt = build_classification_prompt()
         response = client.messages.create(
             model=CLASSIFIER_MODEL,
             max_tokens=CLASSIFIER_MAX_TOKENS,
-            system=CLASSIFICATION_PROMPT,
+            system=prompt,
             messages=[{"role": "user", "content": user_message}],
         )
 
@@ -91,7 +104,15 @@ Analyze this writeup and extract the technique information as JSON."""
             text = text.rsplit("```", 1)[0]
         text = text.strip()
 
-        return json.loads(text)
+        data = json.loads(text)
+        return ClassificationResult(
+            techniques=data.get("techniques", []),
+            tools_used=data.get("tools_used", []),
+            solve_steps=data.get("solve_steps", []),
+            recognition_signals=data.get("recognition_signals", []),
+            difficulty=data.get("difficulty", "medium"),
+            summary=data.get("summary", ""),
+        )
 
     except json.JSONDecodeError as e:
         console.print(f"  [yellow]JSON parse error:[/] {e}")
@@ -147,27 +168,26 @@ def run(limit: int = 100, category: str = None):
 
                 result = classify_writeup(content, challenge_name, cat)
 
-                if result and "techniques" in result:
-                    techniques = result.get("techniques", [])
+                if result:
                     mark_classified(
                         conn, writeup_id,
-                        techniques=techniques,
-                        tools_used=result.get("tools_used", []),
-                        solve_steps=result.get("solve_steps", []),
-                        recognition=result.get("recognition_signals", []),
-                        difficulty=result.get("difficulty", "medium"),
-                        notes=result.get("summary", ""),
+                        techniques=result.techniques,
+                        tools_used=result.tools_used,
+                        solve_steps=result.solve_steps,
+                        recognition=result.recognition_signals,
+                        difficulty=result.difficulty,
+                        notes=result.summary,
                     )
 
                     # Backfill challenge category from inferred techniques
-                    category = infer_category(techniques, TECHNIQUE_TO_CATEGORY)
-                    if category:
-                        backfill_challenge_category(conn, writeup_id, category)
+                    inferred = infer_category(result.techniques, TECHNIQUE_TO_CATEGORY)
+                    if inferred:
+                        backfill_challenge_category(conn, writeup_id, inferred)
 
                     success += 1
 
                     # Log the classification
-                    techs = ", ".join(result["techniques"][:3])
+                    techs = ", ".join(result.techniques[:3])
                     console.print(
                         f"  [dim]{challenge_name}[/] -> [cyan]{techs}[/]"
                     )
