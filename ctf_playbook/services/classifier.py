@@ -12,11 +12,11 @@ from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn
 
 from ctf_playbook.config import ANTHROPIC_API_KEY, CLASSIFIER_MODEL, CLASSIFIER_MAX_TOKENS
-from ctf_playbook.taxonomy import TAXONOMY, TECHNIQUE_TO_CATEGORY
-from ctf_playbook.models import ClassificationResult
+from ctf_playbook.taxonomy import TAXONOMY, TECHNIQUE_TO_CATEGORY, get_category, all_sub_slugs
+from ctf_playbook.models import ClassificationResult, TechniqueMatch
 from ctf_playbook.db import (
     db_session, get_unclassified, mark_classified, mark_class_failed,
-    infer_category, backfill_challenge_category,
+    infer_category, backfill_challenge_category, record_sub_technique,
 )
 
 console = Console()
@@ -37,8 +37,11 @@ def build_taxonomy_reference() -> str:
     lines = []
     for category, info in TAXONOMY.items():
         lines.append(f"\n## {category} — {info['description']}")
-        for tech in info["techniques"]:
-            lines.append(f"  - {tech}")
+        for tech, tech_info in info["techniques"].items():
+            desc = tech_info.get("description", "")
+            lines.append(f"  - {tech}: {desc}" if desc else f"  - {tech}")
+            for sub in tech_info.get("sub_techniques", []):
+                lines.append(f"      - {tech}/{sub}")
     return "\n".join(lines)
 
 
@@ -52,7 +55,11 @@ def build_classification_prompt() -> str:
 ## Your Task
 Analyze the writeup and return a JSON object with these fields:
 
-- **techniques**: List of technique slugs from the taxonomy above that were used. Use the exact slug names. If the technique doesn't fit any listed, create a new descriptive slug (lowercase, hyphenated). Usually 1-3 techniques.
+- **techniques**: List of technique objects. Each object has:
+  - "technique": The technique slug from the taxonomy above (e.g., "rsa-attacks", "buffer-overflow")
+  - "sub_technique": (optional) A more specific sub-technique slug if applicable. Use an existing sub-technique from the taxonomy when it fits, or create a new descriptive slug (lowercase, hyphenated).
+  Example: [{{"technique": "rsa-attacks", "sub_technique": "wiener"}}, {{"technique": "buffer-overflow"}}]
+  Usually 1-3 technique objects. If the technique doesn't fit any listed, create a new descriptive slug for the "technique" field.
 - **tools_used**: List of specific tools, libraries, or scripts mentioned (e.g., "gdb", "pwntools", "z3", "burpsuite", "ghidra", "wireshark", "john", "hashcat", "sqlmap").
 - **recognition_signals**: List of 1-3 short phrases describing how you'd recognize this type of challenge from its description or initial examination (e.g., "binary with no PIE and gets() call", "RSA with small public exponent").
 - **solve_steps**: List of 3-7 short descriptions of the key solving steps in order (e.g., "identify buffer overflow in input handler", "calculate offset to return address", "build ROP chain to call system('/bin/sh')").
@@ -105,8 +112,14 @@ Analyze this writeup and extract the technique information as JSON."""
         text = text.strip()
 
         data = json.loads(text)
+
+        # Parse techniques into TechniqueMatch objects
+        # Handles both new format (list of dicts) and old format (list of strings)
+        raw_techniques = data.get("techniques", [])
+        technique_matches = [TechniqueMatch.from_dict(t) for t in raw_techniques]
+
         return ClassificationResult(
-            techniques=data.get("techniques", []),
+            techniques=technique_matches,
             tools_used=data.get("tools_used", []),
             solve_steps=data.get("solve_steps", []),
             recognition_signals=data.get("recognition_signals", []),
@@ -179,15 +192,32 @@ def run(limit: int = 100, category: str = None):
                         notes=result.summary,
                     )
 
+                    # Record discovered sub-techniques in taxonomy_nodes
+                    known_subs = all_sub_slugs()
+                    for tm in result.techniques:
+                        if tm.sub_technique and tm.sub_technique not in known_subs:
+                            cat_for_tech = get_category(tm.technique)
+                            if cat_for_tech:
+                                record_sub_technique(
+                                    conn, tm.sub_technique,
+                                    tm.technique, cat_for_tech,
+                                )
+
                     # Backfill challenge category from inferred techniques
-                    inferred = infer_category(result.techniques, TECHNIQUE_TO_CATEGORY)
+                    inferred = infer_category(
+                        result.technique_slugs, TECHNIQUE_TO_CATEGORY,
+                    )
                     if inferred:
                         backfill_challenge_category(conn, writeup_id, inferred)
 
                     success += 1
 
                     # Log the classification
-                    techs = ", ".join(result.techniques[:3])
+                    techs = ", ".join(
+                        f"{t.technique}/{t.sub_technique}"
+                        if t.sub_technique else t.technique
+                        for t in result.techniques[:3]
+                    )
                     console.print(
                         f"  [dim]{challenge_name}[/] -> [cyan]{techs}[/]"
                     )
