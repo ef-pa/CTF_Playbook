@@ -172,6 +172,11 @@ def run(limit: int = 500):
 
                 content = fetch_writeup(url)
 
+                # Retry once on failure
+                if not content or len(content.strip()) <= 50:
+                    time.sleep(FETCH_DELAY)
+                    content = fetch_writeup(url)
+
                 if content and len(content.strip()) > 50:
                     # Save to file
                     filename = _url_to_filename(url, challenge_name)
