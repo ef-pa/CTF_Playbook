@@ -214,6 +214,80 @@ def build_tool_cheatsheets(technique_data: dict = None):
     console.print(f"Built tool reference with [green]{len(top_tools)}[/] tools")
 
 
+def build_recon_patterns(technique_data: dict = None):
+    """Generate recon-pattern files that map observable signals to techniques.
+
+    The idea: when you first look at a CTF challenge, you see symptoms
+    (e.g. "binary with gets() and no canary", "RSA with small e").
+    These files let you go from what-you-see to what-technique-to-try.
+
+    Generates one file per top-level category, each listing recognition
+    signals grouped by technique, plus a master "quick-reference.md".
+    """
+    if not technique_data:
+        console.print("[yellow]No technique data — skipping recon patterns[/]")
+        return
+
+    # Collect signals grouped by category -> technique -> signals
+    cat_signals: dict[str, dict[str, list[tuple[str, int]]]] = defaultdict(dict)
+    # Also build a flat signal -> techniques lookup for the quick reference
+    signal_to_techs: dict[str, list[str]] = defaultdict(list)
+
+    for tech_slug, data in technique_data.items():
+        if not data["recognition"]:
+            continue
+
+        parent = _find_parent_category(tech_slug) or "misc"
+        top_signals = sorted(data["recognition"].items(), key=lambda x: -x[1])[:5]
+        cat_signals[parent][tech_slug] = top_signals
+
+        for signal, count in top_signals:
+            signal_to_techs[signal].append(tech_slug)
+
+    # Write per-category recon files
+    for category, techs in sorted(cat_signals.items()):
+        lines = [
+            f"# Recon Patterns: {_slug_to_title(category)}",
+            "",
+            "What to look for when you suspect a challenge falls in this category.",
+            "",
+        ]
+
+        for tech_slug in sorted(techs):
+            signals = techs[tech_slug]
+            lines.append(f"## {_slug_to_title(tech_slug)}")
+            lines.append("")
+            for signal, count in signals:
+                lines.append(f"- {signal}")
+            lines.append("")
+
+        path = RECON_DIR / f"{category}.md"
+        path.write_text("\n".join(lines), encoding="utf-8")
+
+    # Write the quick-reference: signal -> technique lookup
+    lines = [
+        "# Recon Quick Reference",
+        "",
+        "Reverse lookup: from what you observe to which technique to try.",
+        "",
+        "| Signal | Likely Technique(s) |",
+        "|--------|-------------------|",
+    ]
+
+    # Sort by number of techniques (more specific signals first)
+    for signal, techs in sorted(signal_to_techs.items(), key=lambda x: len(x[1])):
+        tech_list = ", ".join(techs[:3])
+        # Escape pipe chars in signal text for markdown table
+        safe_signal = signal.replace("|", "\\|")
+        lines.append(f"| {safe_signal} | {tech_list} |")
+
+    lines.append("")
+    (RECON_DIR / "quick-reference.md").write_text("\n".join(lines), encoding="utf-8")
+
+    console.print(f"Built recon patterns for [green]{len(cat_signals)}[/] categories "
+                  f"({sum(len(t) for t in cat_signals.values())} techniques)")
+
+
 def build_master_index():
     """Generate a master INDEX.md with links to all technique patterns."""
     lines = [
@@ -260,6 +334,16 @@ def build_master_index():
                          f"(techniques/{cat}/{tech}/_pattern.md)")
         lines.append("")
 
+    # Recon patterns section
+    recon_files = sorted(RECON_DIR.glob("*.md"))
+    if recon_files:
+        lines.append("## Recon Patterns")
+        lines.append("_From what you observe to which technique to try_")
+        lines.append("")
+        for f in recon_files:
+            lines.append(f"- [{_slug_to_title(f.stem)}](recon-patterns/{f.name})")
+        lines.append("")
+
     INDEX_PATH.write_text("\n".join(lines), encoding="utf-8")
     console.print(f"Built master index at [green]{INDEX_PATH}[/]")
 
@@ -272,6 +356,7 @@ def run():
     console.print("[green]Folder structure created[/]")
 
     technique_data = build_pattern_files()
+    build_recon_patterns(technique_data)
     build_tool_cheatsheets(technique_data)
     build_master_index()
 
