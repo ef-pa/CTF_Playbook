@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import Optional
 
 from ctf_playbook.config import DB_PATH
-from ctf_playbook.taxonomy import TECHNIQUE_TO_CATEGORY
 
 
 def get_connection(db_path: Path = DB_PATH) -> sqlite3.Connection:
@@ -186,17 +185,28 @@ def mark_fetch_failed(conn: sqlite3.Connection, writeup_id: int):
     conn.execute("UPDATE writeups SET fetch_status='failed' WHERE id=?", (writeup_id,))
 
 
-def infer_category(techniques: list[str]) -> str | None:
+def infer_category(techniques: list[str],
+                    technique_to_category: dict[str, str]) -> str | None:
     """Infer a top-level category from a list of technique slugs.
 
     Uses majority vote: whichever category appears most among the techniques wins.
     Returns None if no techniques map to known categories.
     """
     from collections import Counter
-    cats = [TECHNIQUE_TO_CATEGORY[t] for t in techniques if t in TECHNIQUE_TO_CATEGORY]
+    cats = [technique_to_category[t] for t in techniques if t in technique_to_category]
     if not cats:
         return None
     return Counter(cats).most_common(1)[0][0]
+
+
+def backfill_challenge_category(conn: sqlite3.Connection, writeup_id: int,
+                                category: str):
+    """Set a challenge's category if it's currently missing."""
+    conn.execute("""
+        UPDATE challenges SET category = ?
+        WHERE id = (SELECT challenge_id FROM writeups WHERE id = ?)
+        AND (category IS NULL OR category = '' OR category = 'unknown')
+    """, (category, writeup_id))
 
 
 def mark_classified(conn: sqlite3.Connection, writeup_id: int, techniques: list,
@@ -214,15 +224,6 @@ def mark_classified(conn: sqlite3.Connection, writeup_id: int, techniques: list,
         json.dumps(solve_steps), json.dumps(recognition),
         difficulty, notes, writeup_id
     ))
-
-    # Backfill challenge category if it's missing
-    category = infer_category(techniques)
-    if category:
-        conn.execute("""
-            UPDATE challenges SET category = ?
-            WHERE id = (SELECT challenge_id FROM writeups WHERE id = ?)
-            AND (category IS NULL OR category = '' OR category = 'unknown')
-        """, (category, writeup_id))
 
 
 def mark_class_failed(conn: sqlite3.Connection, writeup_id: int):
@@ -250,7 +251,8 @@ def get_stats(conn: sqlite3.Connection) -> dict:
 
 # ── Category backfill ─────────────────────────────────────────────────────
 
-def backfill_categories(conn: sqlite3.Connection) -> int:
+def backfill_categories(conn: sqlite3.Connection,
+                        technique_to_category: dict[str, str]) -> int:
     """Update challenge categories for already-classified writeups.
 
     For writeups that have been classified (techniques extracted) but whose
@@ -269,7 +271,7 @@ def backfill_categories(conn: sqlite3.Connection) -> int:
     updated = 0
     for row in rows:
         techniques = json.loads(row["techniques"]) if row["techniques"] else []
-        category = infer_category(techniques)
+        category = infer_category(techniques, technique_to_category)
         if category:
             conn.execute(
                 "UPDATE challenges SET category = ? WHERE id = ?",

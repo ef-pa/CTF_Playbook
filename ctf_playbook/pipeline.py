@@ -133,9 +133,10 @@ def stats():
 def fix_categories():
     """Backfill challenge categories from classified technique data."""
     from ctf_playbook.db import backfill_categories
+    from ctf_playbook.taxonomy import TECHNIQUE_TO_CATEGORY
 
     with db_session() as conn:
-        updated = backfill_categories(conn)
+        updated = backfill_categories(conn, TECHNIQUE_TO_CATEGORY)
         if updated:
             console.print(f"[green]Updated {updated} challenge categories from technique data[/]")
         else:

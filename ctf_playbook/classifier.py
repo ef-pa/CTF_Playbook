@@ -12,8 +12,11 @@ from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn
 
 from ctf_playbook.config import ANTHROPIC_API_KEY, CLASSIFIER_MODEL, CLASSIFIER_MAX_TOKENS
-from ctf_playbook.taxonomy import TAXONOMY
-from ctf_playbook.db import db_session, get_unclassified, mark_classified, mark_class_failed
+from ctf_playbook.taxonomy import TAXONOMY, TECHNIQUE_TO_CATEGORY
+from ctf_playbook.db import (
+    db_session, get_unclassified, mark_classified, mark_class_failed,
+    infer_category, backfill_challenge_category,
+)
 
 console = Console()
 
@@ -145,15 +148,22 @@ def run(limit: int = 100, category: str = None):
                 result = classify_writeup(content, challenge_name, cat)
 
                 if result and "techniques" in result:
+                    techniques = result.get("techniques", [])
                     mark_classified(
                         conn, writeup_id,
-                        techniques=result.get("techniques", []),
+                        techniques=techniques,
                         tools_used=result.get("tools_used", []),
                         solve_steps=result.get("solve_steps", []),
                         recognition=result.get("recognition_signals", []),
                         difficulty=result.get("difficulty", "medium"),
                         notes=result.get("summary", ""),
                     )
+
+                    # Backfill challenge category from inferred techniques
+                    category = infer_category(techniques, TECHNIQUE_TO_CATEGORY)
+                    if category:
+                        backfill_challenge_category(conn, writeup_id, category)
+
                     success += 1
 
                     # Log the classification

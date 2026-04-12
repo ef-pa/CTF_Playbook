@@ -12,10 +12,11 @@ from ctf_playbook.db import (
     get_unfetched, get_unclassified,
     mark_fetched, mark_fetch_failed,
     mark_classified, mark_class_failed,
-    infer_category, backfill_categories,
+    infer_category, backfill_categories, backfill_challenge_category,
     find_duplicates, deduplicate,
     search_writeups, get_stats,
 )
+from ctf_playbook.taxonomy import TECHNIQUE_TO_CATEGORY
 
 
 @pytest.fixture
@@ -163,21 +164,24 @@ class TestStatusTransitions:
         assert json.loads(row["tools_used"]) == ["gdb", "pwntools"]
         assert row["difficulty"] == "medium"
 
-    def test_mark_classified_backfills_category(self, db):
-        """Classifying a writeup should set the challenge category if missing."""
+    def test_backfill_challenge_category(self, db):
+        """Backfilling after classification should set the challenge category if missing."""
         eid = upsert_event(db, ctftime_id=1, name="E", year=2024, url="")
         cid = upsert_challenge(db, eid, "test-challenge")  # no category
         wid = insert_writeup(db, cid, "github", "https://a.com")
         mark_fetched(db, wid, "/tmp/raw.md")
+        techniques = ["buffer-overflow"]
         mark_classified(db, wid,
-                        techniques=["buffer-overflow"],
+                        techniques=techniques,
                         tools_used=[], solve_steps=[], recognition=[],
                         difficulty="easy")
+        category = infer_category(techniques, TECHNIQUE_TO_CATEGORY)
+        backfill_challenge_category(db, wid, category)
 
         row = db.execute("SELECT category FROM challenges WHERE id=?", (cid,)).fetchone()
         assert row["category"] == "binary-exploitation"
 
-    def test_mark_classified_does_not_overwrite_existing_category(self, db):
+    def test_backfill_does_not_overwrite_existing_category(self, db):
         eid = upsert_event(db, ctftime_id=1, name="E", year=2024, url="")
         cid = upsert_challenge(db, eid, "test-challenge", category="pwn")
         wid = insert_writeup(db, cid, "github", "https://a.com")
@@ -186,6 +190,7 @@ class TestStatusTransitions:
                         techniques=["sql-injection"],
                         tools_used=[], solve_steps=[], recognition=[],
                         difficulty="easy")
+        backfill_challenge_category(db, wid, "web")
 
         row = db.execute("SELECT category FROM challenges WHERE id=?", (cid,)).fetchone()
         assert row["category"] == "pwn"  # unchanged
@@ -201,26 +206,27 @@ class TestStatusTransitions:
 
 class TestInferCategory:
     def test_single_technique(self):
-        assert infer_category(["buffer-overflow"]) == "binary-exploitation"
-        assert infer_category(["sql-injection"]) == "web"
-        assert infer_category(["rsa-attacks"]) == "cryptography"
-        assert infer_category(["static-analysis"]) == "reverse-engineering"
-        assert infer_category(["file-carving"]) == "forensics"
-        assert infer_category(["osint"]) == "misc"
+        assert infer_category(["buffer-overflow"], TECHNIQUE_TO_CATEGORY) == "binary-exploitation"
+        assert infer_category(["sql-injection"], TECHNIQUE_TO_CATEGORY) == "web"
+        assert infer_category(["rsa-attacks"], TECHNIQUE_TO_CATEGORY) == "cryptography"
+        assert infer_category(["static-analysis"], TECHNIQUE_TO_CATEGORY) == "reverse-engineering"
+        assert infer_category(["file-carving"], TECHNIQUE_TO_CATEGORY) == "forensics"
+        assert infer_category(["osint"], TECHNIQUE_TO_CATEGORY) == "misc"
 
     def test_majority_vote(self):
         # 2 binary vs 1 web -> binary-exploitation
-        result = infer_category(["buffer-overflow", "rop-chains", "sql-injection"])
+        result = infer_category(["buffer-overflow", "rop-chains", "sql-injection"],
+                                TECHNIQUE_TO_CATEGORY)
         assert result == "binary-exploitation"
 
     def test_unknown_techniques_ignored(self):
-        assert infer_category(["some-custom-technique"]) is None
+        assert infer_category(["some-custom-technique"], TECHNIQUE_TO_CATEGORY) is None
 
     def test_empty_list(self):
-        assert infer_category([]) is None
+        assert infer_category([], TECHNIQUE_TO_CATEGORY) is None
 
     def test_mixed_known_unknown(self):
-        result = infer_category(["buffer-overflow", "custom-thing"])
+        result = infer_category(["buffer-overflow", "custom-thing"], TECHNIQUE_TO_CATEGORY)
         assert result == "binary-exploitation"
 
 
@@ -239,7 +245,7 @@ class TestBackfillCategories:
         # Reset category to simulate pre-backfill state
         db.execute("UPDATE challenges SET category = NULL WHERE id=?", (cid,))
 
-        updated = backfill_categories(db)
+        updated = backfill_categories(db, TECHNIQUE_TO_CATEGORY)
         assert updated == 1
         row = db.execute("SELECT category FROM challenges WHERE id=?", (cid,)).fetchone()
         assert row["category"] == "cryptography"
@@ -254,7 +260,7 @@ class TestBackfillCategories:
                         tools_used=[], solve_steps=[], recognition=[],
                         difficulty="easy")
 
-        updated = backfill_categories(db)
+        updated = backfill_categories(db, TECHNIQUE_TO_CATEGORY)
         assert updated == 0
 
 
