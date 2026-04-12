@@ -118,9 +118,26 @@ def index_repo_writeups(repo: dict, conn) -> int:
         and not item["path"].lower().startswith(("license", ".github", "contributing"))
     ]
 
+    # Category aliases — maps common folder names to normalized categories
+    CATEGORY_ALIASES = {
+        "pwn": "pwn", "pwnable": "pwn", "exploitation": "pwn", "binary": "pwn",
+        "binary-exploitation": "pwn", "bof": "pwn",
+        "web": "web", "web-exploitation": "web", "web-security": "web",
+        "crypto": "crypto", "cryptography": "crypto",
+        "rev": "reverse-engineering", "reverse": "reverse-engineering",
+        "reversing": "reverse-engineering", "re": "reverse-engineering",
+        "reverse-engineering": "reverse-engineering",
+        "forensics": "forensics", "forensic": "forensics", "dfir": "forensics",
+        "misc": "misc", "miscellaneous": "misc",
+        "stego": "forensics", "steganography": "forensics",
+        "osint": "misc", "blockchain": "misc", "ppc": "misc",
+        "hardware": "misc", "iot": "misc",
+    }
+
     # Try to extract event/challenge structure from paths
     # Common patterns:
     #   2024/event-name/challenge-name/README.md
+    #   2024/event-name/category/challenge-name/README.md
     #   event-name/category/challenge-name/writeup.md
     #   challenge-name.md
     for item in md_files:
@@ -142,34 +159,48 @@ def index_repo_writeups(repo: dict, conn) -> int:
         challenge_name = "unknown"
         category = None
 
-        if len(parts) >= 3:
-            # Could be year/event/challenge/file or event/category/challenge/file
-            if re.match(r"^20\d{2}$", parts[0]):
-                event_name = parts[1].replace("-", " ").replace("_", " ")
-                challenge_name = parts[2].replace("-", " ").replace("_", " ")
+        # Strip leading year component if present
+        remaining = parts[:-1]  # exclude filename
+        year_from_path = 0
+        if remaining and re.match(r"^20\d{2}$", remaining[0]):
+            year_from_path = int(remaining[0])
+            remaining = remaining[1:]
+
+        if len(remaining) >= 3:
+            # event/category/challenge or event/challenge/subdir
+            event_name = remaining[0].replace("-", " ").replace("_", " ")
+            if remaining[1].lower() in CATEGORY_ALIASES:
+                category = CATEGORY_ALIASES[remaining[1].lower()]
+                challenge_name = remaining[2].replace("-", " ").replace("_", " ")
             else:
-                event_name = parts[0].replace("-", " ").replace("_", " ")
-                # Check if second part is a category
-                if parts[1].lower() in ("pwn", "web", "crypto", "rev", "reversing",
-                                         "forensics", "misc", "stego", "osint", "re",
-                                         "binary", "ppc", "blockchain"):
-                    category = parts[1].lower()
-                    challenge_name = parts[2].replace("-", " ").replace("_", " ")
-                else:
-                    challenge_name = parts[1].replace("-", " ").replace("_", " ")
-        elif len(parts) == 2:
-            event_name = parts[0].replace("-", " ").replace("_", " ")
-            challenge_name = parts[1].replace(".md", "").replace("-", " ").replace("_", " ")
+                challenge_name = remaining[1].replace("-", " ").replace("_", " ")
+        elif len(remaining) == 2:
+            event_name = remaining[0].replace("-", " ").replace("_", " ")
+            if remaining[1].lower() in CATEGORY_ALIASES:
+                category = CATEGORY_ALIASES[remaining[1].lower()]
+                # Use filename as challenge name since path is event/category/file.md
+                challenge_name = filename.replace(".md", "").replace(".markdown", "")
+                challenge_name = challenge_name.replace("-", " ").replace("_", " ")
+            else:
+                challenge_name = remaining[1].replace("-", " ").replace("_", " ")
+        elif len(remaining) == 1:
+            event_name = remaining[0].replace("-", " ").replace("_", " ")
+            challenge_name = filename.replace(".md", "").replace(".markdown", "")
+            challenge_name = challenge_name.replace("-", " ").replace("_", " ")
+        elif len(remaining) == 0:
+            challenge_name = filename.replace(".md", "").replace(".markdown", "")
+            challenge_name = challenge_name.replace("-", " ").replace("_", " ")
 
         # Build the raw file URL on GitHub
         raw_url = (f"https://raw.githubusercontent.com/{repo['full_name']}/"
                    f"{repo['default_branch']}/{path}")
 
         # Extract year if present
-        year = 0
-        year_match = re.search(r"20\d{2}", path)
-        if year_match:
-            year = int(year_match.group())
+        year = year_from_path
+        if not year:
+            year_match = re.search(r"20\d{2}", path)
+            if year_match:
+                year = int(year_match.group())
 
         # Store in DB
         db_event_id = upsert_event(

@@ -148,3 +148,9 @@ TAXONOMY = {
         ],
     },
 }
+
+# Reverse lookup: technique slug -> top-level category
+TECHNIQUE_TO_CATEGORY: dict[str, str] = {}
+for _cat, _info in TAXONOMY.items():
+    for _tech in _info["techniques"]:
+        TECHNIQUE_TO_CATEGORY[_tech] = _cat

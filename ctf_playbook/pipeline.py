@@ -129,6 +129,19 @@ def stats():
                 console.print(tech_table)
 
 
+@cli.command(name="fix-categories")
+def fix_categories():
+    """Backfill challenge categories from classified technique data."""
+    from ctf_playbook.db import backfill_categories
+
+    with db_session() as conn:
+        updated = backfill_categories(conn)
+        if updated:
+            console.print(f"[green]Updated {updated} challenge categories from technique data[/]")
+        else:
+            console.print("[green]All classified challenges already have categories[/]")
+
+
 @cli.command()
 @click.argument("query", required=False)
 @click.option("--technique", "-t", default=None, help="Filter by technique slug")
