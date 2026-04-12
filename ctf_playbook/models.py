@@ -10,15 +10,40 @@ from dataclasses import dataclass, field
 
 
 @dataclass
+class TechniqueMatch:
+    """A single technique classification, optionally with a sub-technique."""
+
+    technique: str
+    sub_technique: str | None = None
+
+    def to_dict(self) -> dict:
+        d = {"technique": self.technique}
+        if self.sub_technique:
+            d["sub_technique"] = self.sub_technique
+        return d
+
+    @classmethod
+    def from_dict(cls, d: dict | str) -> TechniqueMatch:
+        if isinstance(d, str):
+            return cls(technique=d)
+        return cls(technique=d["technique"], sub_technique=d.get("sub_technique"))
+
+
+@dataclass
 class ClassificationResult:
     """Structured output from the LLM classifier."""
 
-    techniques: list[str]
+    techniques: list[TechniqueMatch]
     tools_used: list[str]
     solve_steps: list[str]
     recognition_signals: list[str]
     difficulty: str
     summary: str
+
+    @property
+    def technique_slugs(self) -> list[str]:
+        """Flat list of technique slugs for backward compat."""
+        return [t.technique for t in self.techniques]
 
 
 @dataclass
