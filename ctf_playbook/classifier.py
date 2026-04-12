@@ -158,7 +158,7 @@ def run(limit: int = 100, category: str = None):
                     # Log the classification
                     techs = ", ".join(result["techniques"][:3])
                     console.print(
-                        f"  [dim]{challenge_name}[/] → [cyan]{techs}[/]"
+                        f"  [dim]{challenge_name}[/] -> [cyan]{techs}[/]"
                     )
                 else:
                     mark_class_failed(conn, writeup_id)

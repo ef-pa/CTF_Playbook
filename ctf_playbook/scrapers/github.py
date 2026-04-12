@@ -127,8 +127,14 @@ def index_repo_writeups(repo: dict, conn) -> int:
         path = item["path"]
         parts = path.split("/")
 
-        # Skip top-level README (it's usually repo description)
-        if len(parts) == 1 and parts[0].lower() in ("readme.md", "readme.markdown"):
+        filename = parts[-1].lower()
+        is_readme = filename in ("readme.md", "readme.markdown")
+
+        # Skip top-level README (repo description) and depth-2 READMEs
+        # (event index/table-of-contents, not actual writeups).
+        # READMEs at depth 3+ are usually challenge writeups
+        # (e.g. event/challenge/README.md).
+        if is_readme and len(parts) <= 2:
             continue
 
         # Try to infer event and challenge names from path
