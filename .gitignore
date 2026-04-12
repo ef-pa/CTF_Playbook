@@ -15,3 +15,6 @@ playbook/
 
 # Environment
 .env
+
+# Claude Code
+.claude/
