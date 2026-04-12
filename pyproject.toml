@@ -16,9 +16,15 @@ dependencies = [
     "python-dotenv>=1.0.0",
 ]
 
+[dependency-groups]
+dev = ["pytest>=8.0.0"]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project.scripts]
 ctf-playbook = "ctf_playbook.pipeline:cli"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
