@@ -12,7 +12,7 @@ from pathlib import Path
 
 from rich.console import Console
 
-from ctf_playbook.taxonomy import TAXONOMY
+from ctf_playbook.taxonomy import TAXONOMY, get_sub_techniques
 from ctf_playbook.config import PLAYBOOK_DIR
 from ctf_playbook.db import db_session
 
@@ -47,6 +47,80 @@ def build_folder_structure():
     (PLAYBOOK_DIR / "raw-writeups").mkdir(parents=True, exist_ok=True)
 
 
+def _render_pattern_content(slug: str, data: dict) -> str:
+    """Render the markdown content for a technique or sub-technique pattern file."""
+    # Sort recognition signals by frequency
+    top_signals = sorted(data["recognition"].items(), key=lambda x: -x[1])[:10]
+    # Sort tools by frequency
+    top_tools = sorted(data["tools"].items(), key=lambda x: -x[1])[:15]
+    # Most common difficulty
+    top_diff = max(data["difficulties"].items(), key=lambda x: x[1])[0] \
+        if data["difficulties"] else "medium"
+
+    # Build a generalized solve flow from the most common step patterns
+    # (simplified: just show a representative example)
+    representative_steps = data["steps"][0] if data["steps"] else []
+
+    lines = [
+        f"# {_slug_to_title(slug)}",
+        "",
+        f"**Typical Difficulty:** {top_diff}",
+        f"**Examples in collection:** {len(data['examples'])}",
+        "",
+        "## Recognition Signals",
+        "",
+        "How to identify when this technique applies:",
+        "",
+    ]
+    for signal, count in top_signals:
+        lines.append(f"- {signal} (seen {count}x)")
+
+    lines += [
+        "",
+        "## Common Tools",
+        "",
+    ]
+    for tool, count in top_tools:
+        lines.append(f"- **{tool}** (used {count}x)")
+
+    lines += [
+        "",
+        "## Generalized Solve Flow",
+        "",
+    ]
+    for i, step in enumerate(representative_steps, 1):
+        lines.append(f"{i}. {step}")
+
+    lines += [
+        "",
+        "## Example Writeups",
+        "",
+    ]
+    # Show up to 10 examples, newest first
+    sorted_examples = sorted(data["examples"], key=lambda x: x["year"] or 0, reverse=True)
+    for ex in sorted_examples[:10]:
+        year_str = f" ({ex['year']})" if ex['year'] else ""
+        lines.append(f"- **{ex['challenge']}** — {ex['event']}{year_str} "
+                     f"[{ex['difficulty']}]")
+        if ex["summary"]:
+            lines.append(f"  {ex['summary']}")
+        lines.append(f"  [{ex['url']}]({ex['url']})")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+def _empty_data_bucket() -> dict:
+    """Create an empty data aggregation bucket."""
+    return {
+        "recognition": defaultdict(int),
+        "tools": defaultdict(int),
+        "steps": [],
+        "difficulties": defaultdict(int),
+        "examples": [],
+    }
+
+
 def build_pattern_files():
     """Aggregate classified writeups into _pattern.md files per technique.
 
@@ -55,6 +129,9 @@ def build_pattern_files():
       - Common tools
       - Generalized solve steps
       - Links to example writeups
+
+    When sub-techniques exist, generates additional .md files per sub-technique
+    inside the technique folder.
     """
     console.print("Building pattern files from classified data...")
 
@@ -69,18 +146,28 @@ def build_pattern_files():
             WHERE w.class_status = 'classified'
         """).fetchall()
 
+        # Query sub-technique mappings from the join table
+        sub_rows = conn.execute("""
+            SELECT writeup_id, technique, sub_technique
+            FROM writeup_techniques
+            WHERE sub_technique IS NOT NULL
+        """).fetchall()
+
     if not rows:
         console.print("[yellow]No classified writeups found. Run the classifier first.[/]")
         return
 
-    # Group by technique
-    technique_data = defaultdict(lambda: {
-        "recognition": defaultdict(int),  # signal -> count
-        "tools": defaultdict(int),        # tool -> count
-        "steps": [],                      # list of step-lists
-        "difficulties": defaultdict(int),
-        "examples": [],                   # list of example dicts
-    })
+    # Build writeup_id -> list of (technique, sub_technique) from join table
+    writeup_subs: dict[int, list[tuple[str, str]]] = defaultdict(list)
+    for sr in sub_rows:
+        writeup_subs[sr["writeup_id"]].append((sr["technique"], sr["sub_technique"]))
+
+    # Group by technique (top-level aggregation, same as before)
+    technique_data = defaultdict(_empty_data_bucket)
+    # Group by (technique, sub_technique) for sub-technique files
+    sub_technique_data: dict[str, dict[str, dict]] = defaultdict(
+        lambda: defaultdict(_empty_data_bucket)
+    )
 
     for row in rows:
         techniques = json.loads(row["techniques"]) if row["techniques"] else []
@@ -107,80 +194,63 @@ def build_pattern_files():
             td["difficulties"][row["difficulty"] or "medium"] += 1
             td["examples"].append(example)
 
+        # Aggregate sub-technique data from the join table
+        for parent_tech, sub_tech in writeup_subs.get(row["id"], []):
+            std = sub_technique_data[parent_tech][sub_tech]
+            for sig in recognition:
+                std["recognition"][sig] += 1
+            for tool in tools:
+                std["tools"][tool] += 1
+            std["steps"].append(steps)
+            std["difficulties"][row["difficulty"] or "medium"] += 1
+            std["examples"].append(example)
+
     # Generate _pattern.md for each technique
     for tech_slug, data in technique_data.items():
-        # Find the right directory
         parent = _find_parent_category(tech_slug)
         if parent:
             tech_dir = TECHNIQUES_DIR / parent / tech_slug
         else:
-            # Unknown technique — put in misc
             tech_dir = TECHNIQUES_DIR / "misc" / tech_slug
 
         tech_dir.mkdir(parents=True, exist_ok=True)
-        pattern_path = tech_dir / "_pattern.md"
 
-        # Sort recognition signals by frequency
-        top_signals = sorted(data["recognition"].items(), key=lambda x: -x[1])[:10]
-        # Sort tools by frequency
-        top_tools = sorted(data["tools"].items(), key=lambda x: -x[1])[:15]
-        # Most common difficulty
-        top_diff = max(data["difficulties"].items(), key=lambda x: x[1])[0] \
-            if data["difficulties"] else "medium"
+        # Render the main _pattern.md
+        content = _render_pattern_content(tech_slug, data)
 
-        # Build a generalized solve flow from the most common step patterns
-        # (simplified: just show a representative example)
-        representative_steps = data["steps"][0] if data["steps"] else []
+        # If this technique has sub-technique data, add a sub-techniques section
+        subs_for_tech = sub_technique_data.get(tech_slug, {})
+        if subs_for_tech:
+            sub_lines = [
+                "",
+                "## Sub-Techniques",
+                "",
+                "| Sub-Technique | Writeups | Typical Difficulty |",
+                "|---|---|---|",
+            ]
+            for sub_slug, sub_data in sorted(subs_for_tech.items()):
+                sub_count = len(sub_data["examples"])
+                sub_diff = max(sub_data["difficulties"].items(), key=lambda x: x[1])[0] \
+                    if sub_data["difficulties"] else "medium"
+                sub_lines.append(
+                    f"| [{_slug_to_title(sub_slug)}]({sub_slug}.md) "
+                    f"| {sub_count} | {sub_diff} |"
+                )
+            sub_lines.append("")
+            content += "\n" + "\n".join(sub_lines)
 
-        lines = [
-            f"# {_slug_to_title(tech_slug)}",
-            "",
-            f"**Typical Difficulty:** {top_diff}",
-            f"**Examples in collection:** {len(data['examples'])}",
-            "",
-            "## Recognition Signals",
-            "",
-            "How to identify when this technique applies:",
-            "",
-        ]
-        for signal, count in top_signals:
-            lines.append(f"- {signal} (seen {count}x)")
+        (tech_dir / "_pattern.md").write_text(content, encoding="utf-8")
 
-        lines += [
-            "",
-            "## Common Tools",
-            "",
-        ]
-        for tool, count in top_tools:
-            lines.append(f"- **{tool}** (used {count}x)")
+        # Generate sub-technique .md files
+        for sub_slug, sub_data in subs_for_tech.items():
+            sub_content = _render_pattern_content(sub_slug, sub_data)
+            (tech_dir / f"{sub_slug}.md").write_text(sub_content, encoding="utf-8")
 
-        lines += [
-            "",
-            "## Generalized Solve Flow",
-            "",
-        ]
-        for i, step in enumerate(representative_steps, 1):
-            lines.append(f"{i}. {step}")
-
-        lines += [
-            "",
-            "## Example Writeups",
-            "",
-        ]
-        # Show up to 10 examples, newest first
-        sorted_examples = sorted(data["examples"], key=lambda x: x["year"] or 0, reverse=True)
-        for ex in sorted_examples[:10]:
-            year_str = f" ({ex['year']})" if ex['year'] else ""
-            lines.append(f"- **{ex['challenge']}** — {ex['event']}{year_str} "
-                         f"[{ex['difficulty']}]")
-            if ex["summary"]:
-                lines.append(f"  {ex['summary']}")
-            lines.append(f"  [{ex['url']}]({ex['url']})")
-            lines.append("")
-
-        pattern_path.write_text("\n".join(lines), encoding="utf-8")
-
-    console.print(f"Built pattern files for [green]{len(technique_data)}[/] techniques")
+    sub_file_count = sum(len(subs) for subs in sub_technique_data.values())
+    console.print(
+        f"Built pattern files for [green]{len(technique_data)}[/] techniques"
+        + (f" ({sub_file_count} sub-technique files)" if sub_file_count else "")
+    )
     return technique_data
 
 
@@ -310,6 +380,18 @@ def build_master_index():
                              f"(techniques/{category}/{tech}/_pattern.md)")
             else:
                 lines.append(f"- {_slug_to_title(tech)} _(no writeups yet)_")
+
+            # List sub-technique files if they exist
+            tech_dir = TECHNIQUES_DIR / category / tech
+            if tech_dir.is_dir():
+                for sub_file in sorted(tech_dir.glob("*.md")):
+                    if sub_file.name.startswith("_"):
+                        continue  # skip _pattern.md
+                    sub_slug = sub_file.stem
+                    lines.append(
+                        f"  - [{_slug_to_title(sub_slug)}]"
+                        f"(techniques/{category}/{tech}/{sub_file.name})"
+                    )
         lines.append("")
 
     # Check for techniques not in the taxonomy (discovered by classifier)
