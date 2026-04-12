@@ -67,7 +67,7 @@ def classify(limit, category):
 @cli.command()
 def build():
     """Stage 4: Generate the playbook folder structure."""
-    from ctf_playbook.taxonomy import run as run_taxonomy
+    from ctf_playbook.services.builder import run as run_taxonomy
     run_taxonomy()
 
 
@@ -321,7 +321,7 @@ def run_all(max_events, max_repos, fetch_limit, classify_limit):
     run_classifier(limit=classify_limit)
 
     console.print("\n[bold]Stage 4/4:[/] Building playbook...")
-    from ctf_playbook.taxonomy import run as run_taxonomy
+    from ctf_playbook.services.builder import run as run_taxonomy
     run_taxonomy()
 
     console.rule("[bold green]Pipeline complete!")

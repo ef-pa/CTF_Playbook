@@ -1,6 +1,6 @@
 """Tests for configuration and taxonomy."""
 
-from ctf_playbook.config import TAXONOMY, TECHNIQUE_TO_CATEGORY
+from ctf_playbook.taxonomy import TAXONOMY, TECHNIQUE_TO_CATEGORY
 
 
 class TestTaxonomy:

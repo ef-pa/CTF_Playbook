@@ -11,7 +11,8 @@ from anthropic import Anthropic
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn
 
-from ctf_playbook.config import ANTHROPIC_API_KEY, CLASSIFIER_MODEL, CLASSIFIER_MAX_TOKENS, TAXONOMY
+from ctf_playbook.config import ANTHROPIC_API_KEY, CLASSIFIER_MODEL, CLASSIFIER_MAX_TOKENS
+from ctf_playbook.taxonomy import TAXONOMY
 from ctf_playbook.db import db_session, get_unclassified, mark_classified, mark_class_failed
 
 console = Console()

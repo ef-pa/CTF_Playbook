@@ -10,7 +10,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from ctf_playbook.config import DB_PATH, TECHNIQUE_TO_CATEGORY
+from ctf_playbook.config import DB_PATH
+from ctf_playbook.taxonomy import TECHNIQUE_TO_CATEGORY
 
 
 def get_connection(db_path: Path = DB_PATH) -> sqlite3.Connection:
