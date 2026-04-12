@@ -16,15 +16,16 @@ and organizes everything into a technique-based playbook designed to help solve 
 ### Stages
 
 1. **Scrape** (`ctf_playbook/scrapers/`) — Crawl CTFtime events + tasks + writeup links; discover GitHub repos. Stores metadata in SQLite.
-2. **Fetch** (`ctf_playbook/fetcher.py`) — Download writeup content (HTML→text via trafilatura, raw markdown). Filters out junk (link indexes, too-short content). Saves to `playbook/raw-writeups/`.
-3. **Classify** (`ctf_playbook/classifier.py`) — Send fetched writeups to the Claude API for structured analysis. Extracts: techniques, tools, recognition signals, solve steps, difficulty. Stores results as JSON in the DB.
-4. **Build** (`ctf_playbook/taxonomy.py`) — Generate the playbook folder structure from classified data. Creates `_pattern.md` files per technique aggregating recognition signals, common tools, and solve flows.
+2. **Fetch** (`ctf_playbook/services/fetcher.py`) — Download writeup content (HTML->text via trafilatura, raw markdown). Filters out junk (link indexes, too-short content). Saves to `playbook/raw-writeups/`.
+3. **Classify** (`ctf_playbook/services/classifier.py`) — Send fetched writeups to the Claude API for structured analysis. Extracts: techniques, tools, recognition signals, solve steps, difficulty. Stores results as JSON in the DB.
+4. **Build** (`ctf_playbook/services/builder.py`) — Generate the playbook folder structure from classified data. Creates `_pattern.md` files per technique aggregating recognition signals, common tools, and solve flows.
 
 ## Key Design Decisions
 
 - **Organized by technique, not CTF category.** A heap exploit and a format string bug are both "pwn" but have totally different solve paths. The playbook groups by what-you-actually-do.
 - **SQLite as the central index.** Every writeup has a `fetch_status` and `class_status` so you can resume any stage. Content-hash deduplication detects the same writeup found via different sources.
-- **Taxonomy is defined in `ctf_playbook/config.py`** as a dict. The classifier maps writeups into this taxonomy but can also discover new technique slugs not in the original list.
+- **Taxonomy is defined in `ctf_playbook/taxonomy.py`** as a dict. The classifier maps writeups into this taxonomy but can also discover new technique slugs not in the original list.
+- **Layered architecture.** Configuration, taxonomy data, data access (db), and service logic (classify, build, fetch) are separated so a GUI or API can reuse the same services without importing CLI code.
 
 ## Project Structure
 
@@ -32,25 +33,29 @@ and organizes everything into a technique-based playbook designed to help solve 
 CTF_Playbook/
 ├── pyproject.toml
 ├── README.md
-├── ctf_playbook/                   # Source code
+├── ctf_playbook/                     # Source code
 │   ├── __init__.py
 │   ├── __main__.py
-│   ├── config.py                   # Settings, paths, API keys, rate limits, full taxonomy
-│   ├── db.py                       # SQLite schema, init, query/insert helpers
+│   ├── config.py                     # Settings: paths, API keys, rate limits
+│   ├── taxonomy.py                   # Technique taxonomy data + lookup helpers
+│   ├── models.py                     # Shared dataclasses (ClassificationResult, etc.)
+│   ├── db.py                         # SQLite schema, init, query/insert helpers
+│   ├── cli.py                        # Click CLI orchestrator
 │   ├── scrapers/
 │   │   ├── __init__.py
-│   │   ├── ctftime.py              # CTFtime event/task/writeup scraper
-│   │   └── github.py               # GitHub repo discovery + tree walking
-│   ├── fetcher.py                  # URL fetcher with per-domain rate limiting
-│   ├── classifier.py               # Anthropic API integration, classification prompt
-│   ├── taxonomy.py                 # Playbook folder/pattern/recon-pattern generator
-│   └── pipeline.py                 # Click CLI orchestrator
-├── tests/                          # pytest suite
+│   │   ├── ctftime.py                # CTFtime event/task/writeup scraper
+│   │   └── github.py                 # GitHub repo discovery + tree walking
+│   └── services/
+│       ├── __init__.py
+│       ├── fetcher.py                # URL fetcher with per-domain rate limiting
+│       ├── classifier.py             # Anthropic API integration, classification prompt
+│       └── builder.py                # Playbook folder/pattern/recon-pattern generator
+├── tests/                            # pytest suite
 │   ├── test_config.py
 │   ├── test_db.py
 │   ├── test_fetcher.py
 │   └── test_github_parser.py
-└── playbook/                       # Output (generated at runtime, gitignored)
+└── playbook/                         # Output (generated at runtime, gitignored)
     ├── techniques/
     ├── recon-patterns/
     ├── toolchains/
