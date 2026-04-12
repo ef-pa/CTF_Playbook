@@ -128,6 +128,49 @@ def stats():
                     tech_table.add_row(tech, str(count))
                 console.print(tech_table)
 
+            # Sub-technique stats from the join table
+            sub_count = conn.execute(
+                "SELECT COUNT(DISTINCT sub_technique) FROM writeup_techniques "
+                "WHERE sub_technique IS NOT NULL"
+            ).fetchone()[0]
+            if sub_count:
+                console.print(f"\nDistinct sub-techniques observed: [cyan]{sub_count}[/]")
+
+                sub_rows = conn.execute("""
+                    SELECT technique, sub_technique, COUNT(*) as cnt
+                    FROM writeup_techniques
+                    WHERE sub_technique IS NOT NULL
+                    GROUP BY technique, sub_technique
+                    ORDER BY cnt DESC LIMIT 15
+                """).fetchall()
+                if sub_rows:
+                    sub_table = Table(title="Top Sub-Techniques")
+                    sub_table.add_column("Technique", style="cyan")
+                    sub_table.add_column("Sub-Technique", style="yellow")
+                    sub_table.add_column("Count", style="green", justify="right")
+                    for row in sub_rows:
+                        sub_table.add_row(row["technique"], row["sub_technique"], str(row["cnt"]))
+                    console.print(sub_table)
+
+            # Promotion candidates
+            promo_rows = conn.execute("""
+                SELECT slug, parent_technique, occurrence_count
+                FROM taxonomy_nodes
+                WHERE promoted = 0 AND occurrence_count >= 3
+                ORDER BY occurrence_count DESC LIMIT 10
+            """).fetchall()
+            if promo_rows:
+                promo_table = Table(title="Promotion Candidates (3+ occurrences)")
+                promo_table.add_column("Parent Technique", style="cyan")
+                promo_table.add_column("Sub-Technique", style="yellow")
+                promo_table.add_column("Occurrences", style="green", justify="right")
+                for row in promo_rows:
+                    promo_table.add_row(
+                        row["parent_technique"], row["slug"],
+                        str(row["occurrence_count"]),
+                    )
+                console.print(promo_table)
+
 
 @cli.command(name="fix-categories")
 def fix_categories():
@@ -296,6 +339,46 @@ def dedup():
 
         removed = deduplicate(conn)
         console.print(f"\n[green]Marked {removed} writeups as duplicate[/]")
+
+
+@cli.command(name="soft-reset")
+@click.confirmation_option(prompt="This will reset all classifications to pending. Continue?")
+def soft_reset():
+    """Reset classified writeups to pending for re-classification."""
+    from ctf_playbook.db import soft_reset_classifications
+
+    with db_session() as conn:
+        count = soft_reset_classifications(conn)
+        if count:
+            console.print(f"[green]Reset {count} writeups to pending for re-classification[/]")
+        else:
+            console.print("[green]No classified writeups to reset[/]")
+
+
+@cli.command()
+@click.option("--threshold", default=3, help="Minimum occurrences to propose promotion")
+def promote(threshold):
+    """Review discovered sub-techniques for promotion to the taxonomy."""
+    from ctf_playbook.db import get_promotion_candidates, promote_sub_technique
+
+    with db_session() as conn:
+        candidates = get_promotion_candidates(conn, threshold=threshold)
+        if not candidates:
+            console.print("[green]No sub-techniques ready for promotion[/]")
+            return
+
+        console.print(f"Found [yellow]{len(candidates)}[/] promotion candidates:\n")
+
+        for row in candidates:
+            console.print(
+                f"  [cyan]{row['parent_technique']}/{row['slug']}[/] "
+                f"({row['occurrence_count']} occurrences, category: {row['category']})"
+            )
+            if click.confirm(f"  Promote {row['slug']}?"):
+                promote_sub_technique(conn, row["slug"], row["parent_technique"])
+                console.print(f"    [green]Promoted![/]")
+            else:
+                console.print(f"    [dim]Skipped[/]")
 
 
 @cli.command(name="all")
