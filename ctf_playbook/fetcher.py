@@ -124,6 +124,41 @@ def fetch_webpage(url: str) -> str | None:
         return None
 
 
+def is_useful_writeup(content: str) -> bool:
+    """Check if fetched content is an actual writeup, not an index or link dump.
+
+    Rejects:
+    - Content under 200 chars (too short to be a real writeup)
+    - Content that's mostly URLs with little prose
+    """
+    text = content.strip()
+    if len(text) < 200:
+        return False
+
+    # Count lines vs lines that are just URLs or bullet-pointed links
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
+    if not lines:
+        return False
+
+    link_line = re.compile(
+        r"^\s*[-*]?\s*("
+        r"https?://\S+"              # bare URL
+        r"|.*https?://\S+\s*$"       # line ending with a URL
+        r"|题目|WP\s"                 # Chinese index labels
+        r"|\[.*\]\(.*\)\s*$"         # markdown link-only line
+        r"|\*\s*\[.*\]\(.*\)"        # bullet + markdown link
+        r")",
+        re.IGNORECASE,
+    )
+    link_lines = sum(1 for l in lines if link_line.match(l))
+
+    # If more than 60% of non-empty lines are just links, it's an index
+    if len(lines) > 0 and link_lines / len(lines) > 0.6:
+        return False
+
+    return True
+
+
 def fetch_writeup(url: str) -> str | None:
     """Fetch a writeup from any URL, dispatching to the right method."""
     domain = urlparse(url).netloc.lower()
@@ -173,11 +208,11 @@ def run(limit: int = 500):
                 content = fetch_writeup(url)
 
                 # Retry once on failure
-                if not content or len(content.strip()) <= 50:
+                if not content or not is_useful_writeup(content):
                     time.sleep(FETCH_DELAY)
                     content = fetch_writeup(url)
 
-                if content and len(content.strip()) > 50:
+                if content and is_useful_writeup(content):
                     # Save to file
                     filename = _url_to_filename(url, challenge_name)
                     filepath = RAW_WRITEUPS_DIR / filename

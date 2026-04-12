@@ -143,6 +143,68 @@ def fix_categories():
 
 
 @cli.command()
+def clean():
+    """Re-check fetched writeups and remove junk (link indexes, too-short content, excluded repos)."""
+    from pathlib import Path
+    from ctf_playbook.fetcher import is_useful_writeup
+    from ctf_playbook.scrapers.github import EXCLUDED_REPOS
+
+    with db_session() as conn:
+        cleaned = 0
+
+        # Phase 1: Mark all writeups from excluded repos as failed
+        for repo in EXCLUDED_REPOS:
+            rows = conn.execute("""
+                SELECT id, raw_path FROM writeups
+                WHERE url LIKE ? AND fetch_status != 'failed'
+            """, (f"%{repo}%",)).fetchall()
+
+            for row in rows:
+                if row["raw_path"]:
+                    Path(row["raw_path"]).unlink(missing_ok=True)
+                conn.execute(
+                    "UPDATE writeups SET fetch_status='failed', raw_path=NULL WHERE id=?",
+                    (row["id"],))
+                cleaned += 1
+
+            if rows:
+                console.print(f"  Excluded repo [yellow]{repo}[/]: {len(rows)} writeups removed")
+
+        # Phase 2: Re-check fetched content quality
+        rows = conn.execute("""
+            SELECT id, raw_path FROM writeups
+            WHERE fetch_status = 'fetched' AND raw_path IS NOT NULL
+        """).fetchall()
+
+        content_cleaned = 0
+        for row in rows:
+            p = Path(row["raw_path"])
+            if not p.exists():
+                conn.execute("UPDATE writeups SET fetch_status='failed' WHERE id=?", (row["id"],))
+                content_cleaned += 1
+                continue
+
+            text = p.read_text(encoding="utf-8", errors="replace")
+            # Strip YAML frontmatter before checking
+            if text.startswith("---\n"):
+                end = text.find("---\n", 4)
+                if end != -1:
+                    text = text[end + 4:]
+
+            if not is_useful_writeup(text):
+                p.unlink(missing_ok=True)
+                conn.execute("UPDATE writeups SET fetch_status='failed', raw_path=NULL WHERE id=?",
+                             (row["id"],))
+                content_cleaned += 1
+
+        cleaned += content_cleaned
+        if cleaned:
+            console.print(f"[green]Cleaned {cleaned} total junk writeups[/]")
+        else:
+            console.print("[green]No junk found![/]")
+
+
+@cli.command()
 @click.argument("query", required=False)
 @click.option("--technique", "-t", default=None, help="Filter by technique slug")
 @click.option("--tool", default=None, help="Filter by tool name")

@@ -71,7 +71,8 @@ def search_repos(max_repos: int = 200) -> list[dict]:
                     break
 
                 for repo in data["items"]:
-                    if repo["stargazers_count"] >= GITHUB_MIN_STARS:
+                    if (repo["stargazers_count"] >= GITHUB_MIN_STARS
+                            and repo["full_name"] not in EXCLUDED_REPOS):
                         repos[repo["full_name"]] = {
                             "full_name": repo["full_name"],
                             "url": repo["html_url"],
@@ -221,14 +222,19 @@ def index_repo_writeups(repo: dict, conn) -> int:
 # ── Curated high-value repos ──────────────────────────────────────────────
 
 CURATED_REPOS = [
-    # These are well-known, high-quality writeup collections
-    {"full_name": "ctf-wiki/ctf-wiki", "url": "https://github.com/ctf-wiki/ctf-wiki",
-     "stars": 0, "default_branch": "master", "description": "CTF Wiki"},
+    # Well-known, high-quality writeup collections with actual solve content
     {"full_name": "p4-team/ctf", "url": "https://github.com/p4-team/ctf",
      "stars": 0, "default_branch": "master", "description": "p4 team writeups"},
     {"full_name": "TFNS/writeups", "url": "https://github.com/TFNS/writeups",
      "stars": 0, "default_branch": "master", "description": "TFNS writeups"},
 ]
+
+# Repos that look like writeup collections but are actually indexes,
+# challenge archives, or documentation — not actual solve writeups.
+EXCLUDED_REPOS = {
+    "ctf-wiki/ctf-wiki",        # technique wiki/docs, not writeups
+    "ctf-wiki/ctf-challenges",  # challenge archive with link indexes
+}
 
 
 def run(max_repos: int = 50):
