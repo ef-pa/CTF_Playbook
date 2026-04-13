@@ -37,11 +37,6 @@ FETCH_DELAY = 1.0  # seconds between requests to the same domain
 FETCH_TIMEOUT = 15  # seconds
 FETCH_MAX_SIZE = 5_000_000  # 5 MB max per page
 
-# ── Classification ─────────────────────────────────────────────────────────
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
-CLASSIFIER_MODEL = "claude-sonnet-4-20250514"
-CLASSIFIER_MAX_TOKENS = 2048
-
-# ── Gemini (comparison/alternative backend) ───────────────────────────
+# ── Classification (Gemini) ────────────────────────────────────────────────
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMINI_MODEL = "gemini-3.1-flash-lite-preview"

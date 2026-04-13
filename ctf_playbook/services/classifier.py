@@ -1,6 +1,6 @@
 """Classify writeups using an LLM to extract techniques, tools, and solve patterns.
 
-Reads fetched writeup content, sends it to Claude for structured analysis,
+Reads fetched writeup content, sends it to Gemini for structured analysis,
 and stores the extracted metadata back in the database.
 """
 
@@ -8,26 +8,11 @@ import json
 import time
 from pathlib import Path
 
-from anthropic import Anthropic, APIConnectionError, APITimeoutError, RateLimitError
-from anthropic import AuthenticationError, InternalServerError
+import google.generativeai as genai
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn
 
-
-# Transient errors — the writeup itself is fine, the API is temporarily unavailable.
-# These should NOT mark the writeup as failed.
-_TRANSIENT_ERRORS = (APIConnectionError, APITimeoutError, RateLimitError,
-                     AuthenticationError, InternalServerError)
-
-
-class TransientAPIError(Exception):
-    """Raised when the API fails for a reason unrelated to the writeup content."""
-
-    def __init__(self, message: str, retry_after: float | None = None):
-        super().__init__(message)
-        self.retry_after = retry_after
-
-from ctf_playbook.config import ANTHROPIC_API_KEY, CLASSIFIER_MODEL, CLASSIFIER_MAX_TOKENS
+from ctf_playbook.config import GEMINI_API_KEY, GEMINI_MODEL
 from ctf_playbook.taxonomy import TAXONOMY, TECHNIQUE_TO_CATEGORY, get_category, all_sub_slugs
 from ctf_playbook.models import ClassificationResult, TechniqueMatch
 from ctf_playbook.db import (
@@ -37,15 +22,23 @@ from ctf_playbook.db import (
 
 console = Console()
 
-_client: Anthropic | None = None
+_configured = False
 
 
-def _get_client() -> Anthropic | None:
-    """Lazily create the Anthropic client."""
-    global _client
-    if _client is None and ANTHROPIC_API_KEY:
-        _client = Anthropic(api_key=ANTHROPIC_API_KEY)
-    return _client
+def _ensure_configured():
+    """Lazily configure the Gemini client."""
+    global _configured
+    if not _configured and GEMINI_API_KEY:
+        genai.configure(api_key=GEMINI_API_KEY)
+        _configured = True
+
+
+class TransientAPIError(Exception):
+    """Raised when the API fails for a reason unrelated to the writeup content."""
+
+    def __init__(self, message: str, retry_after: float | None = None):
+        super().__init__(message)
+        self.retry_after = retry_after
 
 
 def build_taxonomy_reference() -> str:
@@ -85,15 +78,32 @@ Analyze the writeup and return a JSON object with these fields:
 - **difficulty**: One of "easy", "medium", "hard", "insane" — based on the complexity of the technique and steps involved.
 - **summary**: A 1-2 sentence summary of what the challenge was and how it was solved.
 
-Respond with ONLY the JSON object. No markdown fences, no preamble."""
+Respond with ONLY the JSON object. No markdown fences, no preamble.
+
+## IMPORTANT RULES
+
+1. **Technique specificity**: NEVER use a category name (like "web", "cryptography", "binary-exploitation", "reverse-engineering", "forensics", "misc") as a technique slug. Always use the most specific technique from the taxonomy above. For example, use "buffer-overflow" not "binary-exploitation", use "rsa-attacks" not "cryptography", use "command-injection" not "web". If multiple techniques apply, list each specific one.
+
+2. **Tools must be actual software tools**: Only list real, named tools, libraries, or frameworks (e.g., "gdb", "pwntools", "pycryptodome", "ghidra", "burpsuite", "wireshark", "z3", "sage"). Do NOT list programming languages ("python", "javascript") or generic descriptions ("assembly patching", "manual analysis") as tools. A tool is something you install or import.
+
+3. **Avoid catch-all technique slugs**: These are NOT valid technique slugs — they are too vague:
+   - "deobfuscation" → use the actual technique (e.g., "static-analysis", "vm-cracking", "dynamic-analysis")
+   - "shellcode" → use the exploitation technique that enables it (e.g., "buffer-overflow", "format-string")
+   - "side-channel-attacks" → only use for TRUE hardware/timing side channels. Padding oracles are "padding-oracle", brute-force key recovery is the relevant crypto technique, and black-box input testing is "constraint-solving" or "dynamic-analysis"
+   - "steganography" → only if data is hidden in media using steganographic encoding. Extracting embedded files from containers is "file-carving". Reconstructing damaged data is not steganography.
+   Pick the technique that describes the core vulnerability or method, not auxiliary steps.
+
+4. **Prefer existing taxonomy slugs**: Always check the taxonomy list above first. Only create a new slug if nothing in the taxonomy fits. When in doubt between a taxonomy slug and a novel one, use the taxonomy slug.
+
+5. **NEVER return a bare category name as a technique**: The following are CATEGORY names, NOT technique slugs: "cryptography", "web", "binary-exploitation", "reverse-engineering", "forensics", "misc". Returning these is ALWAYS wrong. Even for simple challenges, pick the most relevant technique: a basic RSA challenge is "rsa-attacks", a simple XOR cipher is "classical-ciphers", a basic SQL injection is "sql-injection". If truly nothing in the taxonomy fits, create a descriptive slug like "digital-signature-forgery" or "hash-length-extension"."""
 
 
 def classify_writeup(content: str, challenge_name: str = "",
                      category: str = "") -> ClassificationResult | None:
     """Send a writeup to the LLM for classification."""
-    client = _get_client()
-    if not client:
-        console.print("[red]No ANTHROPIC_API_KEY set — cannot classify[/]")
+    _ensure_configured()
+    if not GEMINI_API_KEY:
+        console.print("[red]No GEMINI_API_KEY set — cannot classify[/]")
         return None
 
     # Truncate very long writeups to avoid token limits
@@ -110,18 +120,16 @@ Original CTF Category: {category or 'unknown'}
 {content}
 --- END WRITEUP ---
 
-Analyze this writeup and extract the technique information as JSON."""
+Analyze this writeup and extract the technique information as JSON. Remember: use SPECIFIC technique slugs from the taxonomy, never category names. Only list actual software tools, not programming languages."""
 
     try:
         prompt = build_classification_prompt()
-        response = client.messages.create(
-            model=CLASSIFIER_MODEL,
-            max_tokens=CLASSIFIER_MAX_TOKENS,
-            system=prompt,
-            messages=[{"role": "user", "content": user_message}],
+        model = genai.GenerativeModel(
+            model_name=GEMINI_MODEL,
+            system_instruction=prompt,
         )
-
-        text = response.content[0].text.strip()
+        response = model.generate_content(user_message)
+        text = response.text.strip()
 
         # Clean up potential markdown fences
         if text.startswith("```"):
@@ -160,17 +168,19 @@ Analyze this writeup and extract the technique information as JSON."""
     except json.JSONDecodeError as e:
         console.print(f"  [yellow]JSON parse error:[/] {e}")
         return None  # permanent — the LLM returned unparseable output
-    except _TRANSIENT_ERRORS as e:
-        retry_after = None
-        if isinstance(e, RateLimitError) and hasattr(e, "response"):
-            raw = e.response.headers.get("retry-after")
-            if raw:
-                try:
-                    retry_after = float(raw)
-                except (ValueError, TypeError):
-                    pass
-        raise TransientAPIError(str(e), retry_after=retry_after) from e
     except Exception as e:
+        err_str = str(e).lower()
+        # Detect transient errors (rate limit, connection, server errors)
+        if any(k in err_str for k in ("rate limit", "quota", "429", "500",
+                                       "503", "timeout", "connection")):
+            retry_after = None
+            if "retry" in err_str:
+                # Try to extract a retry delay from the error message
+                import re
+                m = re.search(r"(\d+)\s*s", err_str)
+                if m:
+                    retry_after = float(m.group(1))
+            raise TransientAPIError(str(e), retry_after=retry_after) from e
         console.print(f"  [red]Unexpected error:[/] {e}")
         return None  # permanent — unknown issue with this specific writeup
 
@@ -179,8 +189,8 @@ def run(limit: int = 100, category: str = None):
     """Main entry point: classify unclassified writeups."""
     console.rule("[bold blue]Writeup Classifier")
 
-    if not ANTHROPIC_API_KEY:
-        console.print("[red]Set ANTHROPIC_API_KEY to use the classifier[/]")
+    if not GEMINI_API_KEY:
+        console.print("[red]Set GEMINI_API_KEY to use the classifier[/]")
         return
 
     with db_session() as conn:
@@ -254,7 +264,7 @@ def run(limit: int = 100, category: str = None):
                             progress.update(task, advance=1)
                             continue
                     else:
-                        # Non-rate-limit transient error (connection, auth, etc.)
+                        # Non-rate-limit transient error (connection, etc.)
                         consecutive_transient += 1
                         skipped += 1
                         console.print(f"  [yellow]API unavailable:[/] {e}")
@@ -262,8 +272,7 @@ def run(limit: int = 100, category: str = None):
                         if consecutive_transient >= max_consecutive_transient:
                             console.print(
                                 f"\n[red]Stopping:[/] {consecutive_transient} "
-                                f"consecutive API failures — likely out of credits "
-                                f"or unreachable. "
+                                f"consecutive API failures. "
                                 f"Remaining writeups left as pending."
                             )
                             break

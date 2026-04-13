@@ -10,7 +10,6 @@ dependencies = [
     "beautifulsoup4>=4.12.0",
     "lxml>=5.1.0",
     "trafilatura>=1.8.0",
-    "anthropic>=0.40.0",
     "rich>=13.7.0",
     "click>=8.1.0",
     "python-dotenv>=1.0.0",

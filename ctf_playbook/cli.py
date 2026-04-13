@@ -399,10 +399,10 @@ def promote(threshold):
 @click.option("--limit", "-n", default=5, help="Number of writeups to compare")
 @click.option("--category", "-c", default=None, help="Filter by category")
 def compare(limit, category):
-    """Compare Gemini classification against existing Claude results."""
+    """Re-classify stored writeups and compare against previous results."""
     from pathlib import Path
     from ctf_playbook.config import GEMINI_API_KEY
-    from ctf_playbook.services.gemini_classifier import classify_writeup_gemini
+    from ctf_playbook.services.classifier import classify_writeup
 
     if not GEMINI_API_KEY:
         console.print("[red]Set GEMINI_API_KEY in your .env to use comparison[/]")
@@ -458,43 +458,43 @@ def compare(limit, category):
             if len(content.strip()) < 50:
                 continue
 
-            # Claude's existing results
-            claude_techs = json.loads(row["techniques"])
-            claude_tools = set(json.loads(row["tools_used"]))
-            claude_diff = row["difficulty"]
+            # Stored results
+            stored_techs = json.loads(row["techniques"])
+            stored_tools = set(json.loads(row["tools_used"]))
+            stored_diff = row["difficulty"]
 
-            # Gemini's fresh classification
+            # Fresh classification
             console.print(f"[bold cyan]{row['challenge_name']}[/] ({row['category'] or '?'})")
-            result = classify_writeup_gemini(
+            result = classify_writeup(
                 content, row["challenge_name"], row["category"] or "",
             )
 
             if not result:
-                console.print("  [red]Gemini failed to classify[/]\n")
+                console.print("  [red]Classification failed[/]\n")
                 continue
 
-            gemini_techs = result.technique_slugs
-            gemini_tools = set(result.tools_used)
-            gemini_diff = result.difficulty
+            fresh_techs = result.technique_slugs
+            fresh_tools = set(result.tools_used)
+            fresh_diff = result.difficulty
 
             total += 1
 
             # Compare techniques
-            claude_set = set(claude_techs)
-            gemini_set = set(gemini_techs)
-            tech_overlap = claude_set & gemini_set
+            stored_set = set(stored_techs)
+            fresh_set = set(fresh_techs)
+            tech_overlap = stored_set & fresh_set
             if tech_overlap:
                 tech_matches += 1
 
             # Compare difficulty
-            diff_match = claude_diff == gemini_diff
+            diff_match = stored_diff == fresh_diff
             if diff_match:
                 diff_matches += 1
 
             # Compare tools
-            if claude_tools or gemini_tools:
-                overlap = len(claude_tools & gemini_tools)
-                union = len(claude_tools | gemini_tools)
+            if stored_tools or fresh_tools:
+                overlap = len(stored_tools & fresh_tools)
+                union = len(stored_tools | fresh_tools)
                 tool_overlaps.append(overlap / union if union else 0)
 
             # Display comparison
@@ -503,26 +503,26 @@ def compare(limit, category):
 
             table = Table(show_header=True, box=None, padding=(0, 2))
             table.add_column("", style="dim", width=12)
-            table.add_column("Claude", style="cyan")
-            table.add_column("Gemini", style="yellow")
+            table.add_column("Stored", style="cyan")
+            table.add_column("Fresh", style="yellow")
             table.add_column("", width=7)
 
             table.add_row(
                 "Techniques",
-                ", ".join(claude_techs),
-                ", ".join(gemini_techs),
+                ", ".join(stored_techs),
+                ", ".join(fresh_techs),
                 tech_indicator,
             )
             table.add_row(
                 "Difficulty",
-                claude_diff or "?",
-                gemini_diff or "?",
+                stored_diff or "?",
+                fresh_diff or "?",
                 diff_indicator,
             )
             table.add_row(
                 "Tools",
-                ", ".join(sorted(claude_tools)[:6]),
-                ", ".join(sorted(gemini_tools)[:6]),
+                ", ".join(sorted(stored_tools)[:6]),
+                ", ".join(sorted(fresh_tools)[:6]),
                 "",
             )
             table.add_row(

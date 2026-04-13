@@ -48,7 +48,7 @@ flowchart LR
 1. **Scrape** (`ctf_playbook/scrapers/`) — Crawl CTFtime events + tasks + writeup links; discover GitHub repos. Stores metadata in SQLite.
 2. **Fetch** (`ctf_playbook/services/fetcher.py`) — Download writeup content (HTML->text via trafilatura, raw markdown). Filters out junk (link indexes, too-short content). Saves to `playbook/raw-writeups/`.
 3. **Clean** (automatic) — Runs automatically before classification. Backfills content hashes, removes writeups from excluded repos, re-checks content quality, and deduplicates by content hash. No LLM tokens wasted on junk or duplicates.
-4. **Classify** (`ctf_playbook/services/classifier.py`) — Send fetched writeups to the Claude API for structured analysis. Extracts: techniques (with sub-techniques), tools, recognition signals, solve steps, difficulty. Stores results as JSON in the DB.
+4. **Classify** (`ctf_playbook/services/classifier.py`) — Send fetched writeups to Gemini for structured analysis. Extracts: techniques (with sub-techniques), tools, recognition signals, solve steps, difficulty. Stores results as JSON in the DB.
 5. **Build** (`ctf_playbook/services/builder.py`) — Three-phase pipeline: assemble structured data from DB, export `playbook.json` (single source of truth), then render browsable markdown files.
 
 ## Key Design Decisions
@@ -116,7 +116,7 @@ uv sync
 Set environment variables:
 ```bash
 export GITHUB_TOKEN="ghp_..."        # GitHub personal access token (optional, raises rate limit)
-export ANTHROPIC_API_KEY="sk-..."    # Required for the classify stage
+export GEMINI_API_KEY="..."          # Required for the classify stage (free tier available)
 ```
 
 ## Usage
