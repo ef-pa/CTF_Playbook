@@ -6,11 +6,41 @@ and organizes everything into a technique-based playbook designed to help solve 
 
 ## Architecture
 
-```
-┌─────────────┐     ┌──────────────┐     ┌───────────────┐     ┌───────────────┐     ┌──────────────┐
-│  1. Scrape  │───▶│  2. Fetch     │───▶│  3. Clean     │───▶│  4. Classify  │────▶│  5. Build    │
-│  (discover) │     │  (content)   │     │  (dedup/junk) │     │  (taxonomy)   │     │ (playbook)   │
-└─────────────┘     └──────────────┘     └───────────────┘     └───────────────┘     └──────────────┘
+```mermaid
+flowchart LR
+    subgraph Sources
+        CT[CTFtime]
+        GH[GitHub]
+    end
+
+    subgraph Pipeline
+        direction LR
+        S[1. Scrape]
+        F[2. Fetch]
+        C[3. Clean]
+        CL[4. Classify]
+        B[5. Build]
+        S --> F --> C --> CL --> B
+    end
+
+    subgraph Storage
+        DB[(SQLite)]
+        PJ[playbook.json]
+    end
+
+    subgraph Output
+        MD[Markdown Files]
+        GUI[Web GUI]
+    end
+
+    CT --> S
+    GH --> S
+    S --- DB
+    F --- DB
+    CL --- DB
+    B --> PJ
+    PJ --> MD
+    PJ --> GUI
 ```
 
 ### Stages
@@ -53,7 +83,16 @@ CTF_Playbook/
 │       ├── fetcher.py                # URL fetcher with per-domain rate limiting
 │       ├── classifier.py             # LLM classification with hierarchical technique output
 │       └── builder.py                # Playbook + sub-technique file generation
-├── tests/                            # pytest suite (184 tests)
+│   └── gui/                          # Local web app (FastAPI + Jinja2)
+│       ├── __init__.py
+│       ├── app.py                    # App factory, static/template mount
+│       ├── data.py                   # Playbook loader, DB search wrapper
+│       ├── routes/
+│       │   ├── pages.py              # HTML routes: dashboard, technique, category, search, tools
+│       │   └── api.py                # JSON API: /api/stats, /api/techniques, /api/search
+│       ├── templates/                # Jinja2 templates (dark theme)
+│       └── static/                   # CSS + JS (sortable tables, sidebar tree)
+├── tests/                            # pytest suite (187 tests)
 │   ├── test_config.py                # Taxonomy structure, sub-techniques, category inference
 │   ├── test_db.py                    # CRUD, sub-technique tracking, dedup, soft reset
 │   ├── test_builder.py               # Builder pipeline: serialization, rendering, cross-refs
@@ -93,6 +132,7 @@ uv run ctf-playbook classify        # Extract techniques via LLM (auto-cleans fi
 uv run ctf-playbook build           # Generate playbook.json + markdown files
 uv run ctf-playbook export          # Export playbook.json only (no markdown)
 uv run ctf-playbook export -o out.json  # Export to a custom path
+uv run ctf-playbook serve           # Launch the interactive web GUI
 
 # Stage options
 uv run ctf-playbook scrape --max-events 100     # Limit CTFtime events
@@ -100,6 +140,11 @@ uv run ctf-playbook scrape --source github      # Only scrape GitHub
 uv run ctf-playbook fetch --limit 500           # Fetch up to 500 writeups
 uv run ctf-playbook classify --limit 100        # Classify up to 100 writeups
 uv run ctf-playbook classify --category pwn     # Only classify pwn challenges
+
+# GUI
+uv run ctf-playbook serve           # Browse the playbook at http://127.0.0.1:8080
+uv run ctf-playbook serve --port 3000          # Custom port
+uv run ctf-playbook serve --no-browser         # Don't auto-open browser
 
 # Utilities
 uv run ctf-playbook stats           # Database statistics (includes sub-technique breakdown)
@@ -127,6 +172,28 @@ uv run pytest
 - **CTFtime**: 1.5s delay between requests (be respectful)
 - **GitHub API**: 5,000 req/hr with token, 60/hr without
 - **Blog fetching**: 1s delay per domain, randomized
+
+## Interactive GUI
+
+The playbook includes a local web app for browsing techniques, searching writeups, and exploring tools. It reads directly from `playbook.json` — no external services required.
+
+```bash
+uv run ctf-playbook serve                  # Opens browser at http://127.0.0.1:8080
+uv run ctf-playbook serve --port 3000      # Custom port
+uv run ctf-playbook serve --no-browser     # Don't auto-open browser
+```
+
+### Views
+
+- **Dashboard** — Stats cards, category breakdown, difficulty distribution
+- **Technique Detail** — Recognition signals, tools, solve flow, cross-references, sub-technique cards, example writeups
+- **Category Overview** — Sortable table of techniques with writeup counts, difficulty, sub-techniques
+- **Recon Patterns** — Per-category recognition patterns for quick triage during CTFs
+- **Search** — Full-text search with filters by technique, tool, and difficulty
+- **Tool Reference** — Searchable table of tools with usage counts and linked techniques
+- **Sidebar Tree** — Persistent taxonomy navigation grouped by category, with sub-technique deep links
+
+The GUI also exposes a JSON API at `/api/stats`, `/api/techniques`, `/api/technique/{slug}`, and `/api/search` for programmatic access.
 
 ## Taxonomy Design
 
