@@ -300,6 +300,94 @@ TAXONOMY = {
 }
 
 
+# ── Keyword-based category inference ──────────────────────────────────────
+# Auto-derived from taxonomy slugs + domain supplements.
+# Used as a fallback when a classifier-invented technique isn't in the taxonomy.
+
+_KEYWORD_SUPPLEMENTS = {
+    "web": {"css", "php", "javascript", "dom", "http", "http2", "http3",
+            "html", "url", "cookie", "session", "oauth", "cors",
+            "download", "client", "source", "endpoint", "servlet", "cgi"},
+    "cryptography": {"ecdsa", "nonce", "aes", "encrypt", "decrypt",
+                     "prime", "modular", "signature", "cipher", "xor",
+                     "polynomial", "crypto", "cryptographic", "commitment",
+                     "substitution", "chaffing", "winnowing", "knowledge",
+                     "forgery", "shor", "brute"},
+    "binary-exploitation": {"libc", "plt", "aslr", "pie", "syscall",
+                            "dll", "cet", "ret2", "gadget", "elf"},
+    "reverse-engineering": {"decompile", "disassemble", "bytecode",
+                            "unpacking", "reversal", "ida", "apk", "dex",
+                            "multi"},
+    "forensics": {"pcap", "exif", "volatility", "wireshark", "stego",
+                  "usb", "hid", "keylogger", "audio", "comparison"},
+}
+
+
+def _build_category_keywords() -> dict[str, set[str]]:
+    """Build keyword sets per category from taxonomy slugs + supplements.
+
+    Tokens that appear in 3+ categories are pruned (too generic).
+    """
+    from collections import Counter
+
+    keywords: dict[str, set[str]] = {}
+    for category, info in TAXONOMY.items():
+        tokens = set()
+        tokens.update(category.split("-"))
+        for tech_slug in info["techniques"]:
+            tokens.update(tech_slug.split("-"))
+        tokens.update(_KEYWORD_SUPPLEMENTS.get(category, set()))
+        keywords[category] = tokens
+
+    # Prune tokens that appear in 3+ categories — too generic to disambiguate
+    token_counts: Counter = Counter()
+    for tokens in keywords.values():
+        token_counts.update(tokens)
+    generic = {t for t, c in token_counts.items() if c >= 3}
+    for category in keywords:
+        keywords[category] -= generic
+
+    return keywords
+
+
+_CATEGORY_KEYWORDS = _build_category_keywords()
+
+
+def infer_category_from_slug(slug: str) -> str | None:
+    """Infer a category for a technique slug not in the taxonomy.
+
+    First checks if the slug is literally a category name.
+    Then scores slug tokens against each category's keyword set.
+    Returns the best unambiguous match, or None if tied/unknown.
+    """
+    if slug in TAXONOMY:
+        return slug
+
+    tokens = set(slug.split("-"))
+    scores: dict[str, int] = {}
+    for category, kw_set in _CATEGORY_KEYWORDS.items():
+        overlap = len(tokens & kw_set)
+        if overlap > 0:
+            scores[category] = overlap
+
+    if not scores:
+        return None
+
+    best_score = max(scores.values())
+    candidates = [c for c, s in scores.items() if s == best_score]
+
+    # Single winner → return it
+    if len(candidates) == 1:
+        return candidates[0]
+
+    # Tied: prefer non-misc over misc
+    non_misc = [c for c in candidates if c != "misc"]
+    if len(non_misc) == 1:
+        return non_misc[0]
+
+    return None  # ambiguous — leave in misc
+
+
 # ── Lookup helpers ─────────────────────────────────────────────────────────
 
 # Reverse lookup: technique slug -> top-level category

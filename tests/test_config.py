@@ -5,6 +5,7 @@ from ctf_playbook.taxonomy import (
     get_category, get_techniques, get_technique_info,
     get_sub_techniques, get_parent_technique,
     all_slugs, all_sub_slugs, categories,
+    infer_category_from_slug, _CATEGORY_KEYWORDS,
 )
 
 
@@ -183,3 +184,81 @@ class TestHelpers:
         assert "web" in cats
         assert "misc" in cats
         assert len(cats) == 6
+
+
+class TestInferCategoryFromSlug:
+    """Tests for keyword-based category inference."""
+
+    def test_category_name_as_slug(self):
+        """Slugs that are literally category names get mapped correctly."""
+        assert infer_category_from_slug("cryptography") == "cryptography"
+        assert infer_category_from_slug("reverse-engineering") == "reverse-engineering"
+        assert infer_category_from_slug("web") == "web"
+
+    def test_web_techniques(self):
+        assert infer_category_from_slug("css-injection") == "web"
+        assert infer_category_from_slug("web-shell-upload") == "web"
+        assert infer_category_from_slug("file-download-xss") == "web"
+        assert infer_category_from_slug("php-filter-chain") == "web"
+
+    def test_crypto_techniques(self):
+        assert infer_category_from_slug("ecdsa-nonce-reuse") == "cryptography"
+        assert infer_category_from_slug("signature-forgery") == "cryptography"
+        assert infer_category_from_slug("xor-key-recovery") == "cryptography"
+        assert infer_category_from_slug("substitution-cipher") == "cryptography"
+
+    def test_binary_exploitation_techniques(self):
+        assert infer_category_from_slug("syscall-manipulation") == "binary-exploitation"
+        assert infer_category_from_slug("pie-bypass") == "binary-exploitation"
+        assert infer_category_from_slug("cet-bypass") == "binary-exploitation"
+
+    def test_reverse_engineering_techniques(self):
+        assert infer_category_from_slug("algorithm-reversal") == "reverse-engineering"
+        assert infer_category_from_slug("multi-stage-unpacking") == "reverse-engineering"
+
+    def test_forensics_techniques(self):
+        assert infer_category_from_slug("audio-steganography") == "forensics"
+        assert infer_category_from_slug("usb-hid-keylogger-analysis") == "forensics"
+
+    def test_unknown_returns_none(self):
+        """Completely unknown slugs return None (will go to misc)."""
+        assert infer_category_from_slug("simulated-annealing") is None
+        assert infer_category_from_slug("de-bruijn-sequence") is None
+
+    def test_ambiguous_returns_none(self):
+        """Ambiguous slugs (equal scores in 2+ categories) return None."""
+        # "binary-patching" — "binary" is BE, "patching" is RE, tie
+        assert infer_category_from_slug("binary-patching") is None
+
+    def test_known_techniques_also_resolve(self):
+        """Known taxonomy technique slugs also resolve via token matching."""
+        # buffer-overflow has tokens "buffer" + "overflow" — both BE keywords
+        assert infer_category_from_slug("buffer-overflow") == "binary-exploitation"
+        assert infer_category_from_slug("sql-injection") == "web"
+
+    def test_generic_tokens_pruned(self):
+        """Tokens appearing in 3+ categories should be pruned from keywords."""
+        # Check that the keyword sets don't contain overly generic tokens
+        all_tokens = set()
+        shared = set()
+        for cat, tokens in _CATEGORY_KEYWORDS.items():
+            for t in tokens:
+                if t in all_tokens:
+                    shared.add(t)
+                all_tokens.add(t)
+        # Any token in _CATEGORY_KEYWORDS should appear in at most 2 categories
+        from collections import Counter
+        counts = Counter()
+        for tokens in _CATEGORY_KEYWORDS.values():
+            counts.update(tokens)
+        for token, count in counts.items():
+            assert count <= 2, f"Token '{token}' in {count} categories (should be pruned)"
+
+    def test_self_improving(self):
+        """Keywords are derived from TAXONOMY — adding techniques would expand them."""
+        # "xss" should be a web keyword (from the xss technique)
+        assert "xss" in _CATEGORY_KEYWORDS["web"]
+        # "rsa" should be a crypto keyword (from rsa-attacks)
+        assert "rsa" in _CATEGORY_KEYWORDS["cryptography"]
+        # "heap" should be a BE keyword (from heap-exploitation)
+        assert "heap" in _CATEGORY_KEYWORDS["binary-exploitation"]

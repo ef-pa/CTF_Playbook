@@ -66,9 +66,24 @@ def classify(limit, category):
 
 @cli.command()
 def build():
-    """Stage 4: Generate the playbook folder structure."""
-    from ctf_playbook.services.builder import run as run_taxonomy
-    run_taxonomy()
+    """Stage 4: Generate the playbook (JSON data + markdown files)."""
+    from ctf_playbook.services.builder import run as run_builder
+    run_builder()
+
+
+@cli.command()
+@click.option("--output", "-o", default=None, help="Output path for JSON file")
+def export(output):
+    """Export playbook data as JSON (without generating markdown)."""
+    from pathlib import Path
+    from ctf_playbook.services.builder import (
+        build_playbook_data, export_playbook_json,
+    )
+
+    playbook = build_playbook_data()
+    if playbook:
+        path = Path(output) if output else None
+        export_playbook_json(playbook, path)
 
 
 @cli.command()
@@ -405,8 +420,8 @@ def run_all(max_events, max_repos, fetch_limit, classify_limit):
     run_classifier(limit=classify_limit)
 
     console.print("\n[bold]Stage 4/4:[/] Building playbook...")
-    from ctf_playbook.services.builder import run as run_taxonomy
-    run_taxonomy()
+    from ctf_playbook.services.builder import run as run_builder
+    run_builder()
 
     console.rule("[bold green]Pipeline complete!")
 
