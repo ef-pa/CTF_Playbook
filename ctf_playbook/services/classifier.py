@@ -210,8 +210,14 @@ def run(limit: int = 100, category: str = None):
 
                 # Read the raw content
                 if not raw_path or not Path(raw_path).exists():
-                    mark_class_failed(conn, writeup_id)
-                    failed += 1
+                    # Missing file is a fetch problem, not a classification
+                    # failure. Reset to re-fetch instead of marking as failed.
+                    conn.execute(
+                        "UPDATE writeups SET fetch_status='pending', "
+                        "raw_path=NULL WHERE id=?",
+                        (writeup_id,),
+                    )
+                    skipped += 1
                     progress.update(task, advance=1)
                     continue
 
