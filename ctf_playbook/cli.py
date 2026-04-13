@@ -60,7 +60,22 @@ def fetch(limit):
 @click.option("--category", default=None, help="Only classify this CTF category")
 def classify(limit, category):
     """Stage 3: Classify writeups using LLM analysis."""
+    from ctf_playbook.scrapers.github import EXCLUDED_REPOS
+    from ctf_playbook.db import (
+        backfill_content_hashes, clean_junk_writeups, deduplicate,
+    )
     from ctf_playbook.services.classifier import run as run_classifier
+
+    console.print("[dim]Running pre-classification cleanup...[/]")
+    with db_session() as conn:
+        backfill_content_hashes(conn)
+        cleaned = clean_junk_writeups(conn, excluded_repos=EXCLUDED_REPOS)
+        removed = deduplicate(conn)
+        if cleaned or removed:
+            console.print(
+                f"  Cleaned {cleaned} junk, removed {removed} duplicates"
+            )
+
     run_classifier(limit=limit, category=category)
 
 
@@ -204,59 +219,11 @@ def fix_categories():
 @cli.command()
 def clean():
     """Re-check fetched writeups and remove junk (link indexes, too-short content, excluded repos)."""
-    from pathlib import Path
-    from ctf_playbook.services.fetcher import is_useful_writeup
     from ctf_playbook.scrapers.github import EXCLUDED_REPOS
+    from ctf_playbook.db import clean_junk_writeups
 
     with db_session() as conn:
-        cleaned = 0
-
-        # Phase 1: Mark all writeups from excluded repos as failed
-        for repo in EXCLUDED_REPOS:
-            rows = conn.execute("""
-                SELECT id, raw_path FROM writeups
-                WHERE url LIKE ? AND fetch_status != 'failed'
-            """, (f"%{repo}%",)).fetchall()
-
-            for row in rows:
-                if row["raw_path"]:
-                    Path(row["raw_path"]).unlink(missing_ok=True)
-                conn.execute(
-                    "UPDATE writeups SET fetch_status='failed', raw_path=NULL WHERE id=?",
-                    (row["id"],))
-                cleaned += 1
-
-            if rows:
-                console.print(f"  Excluded repo [yellow]{repo}[/]: {len(rows)} writeups removed")
-
-        # Phase 2: Re-check fetched content quality
-        rows = conn.execute("""
-            SELECT id, raw_path FROM writeups
-            WHERE fetch_status = 'fetched' AND raw_path IS NOT NULL
-        """).fetchall()
-
-        content_cleaned = 0
-        for row in rows:
-            p = Path(row["raw_path"])
-            if not p.exists():
-                conn.execute("UPDATE writeups SET fetch_status='failed' WHERE id=?", (row["id"],))
-                content_cleaned += 1
-                continue
-
-            text = p.read_text(encoding="utf-8", errors="replace")
-            # Strip YAML frontmatter before checking
-            if text.startswith("---\n"):
-                end = text.find("---\n", 4)
-                if end != -1:
-                    text = text[end + 4:]
-
-            if not is_useful_writeup(text):
-                p.unlink(missing_ok=True)
-                conn.execute("UPDATE writeups SET fetch_status='failed', raw_path=NULL WHERE id=?",
-                             (row["id"],))
-                content_cleaned += 1
-
-        cleaned += content_cleaned
+        cleaned = clean_junk_writeups(conn, excluded_repos=EXCLUDED_REPOS)
         if cleaned:
             console.print(f"[green]Cleaned {cleaned} total junk writeups[/]")
         else:
@@ -314,31 +281,13 @@ def search(query, technique, tool, difficulty, limit):
 @cli.command()
 def dedup():
     """Find and remove duplicate writeups (by content hash)."""
-    import hashlib
-    from pathlib import Path
-    from ctf_playbook.db import find_duplicates, deduplicate
+    from ctf_playbook.db import (
+        backfill_content_hashes, find_duplicates, deduplicate,
+    )
 
     with db_session() as conn:
-        # Backfill content hashes for writeups fetched before hashing was added
-        missing = conn.execute("""
-            SELECT id, raw_path FROM writeups
-            WHERE fetch_status='fetched' AND content_hash IS NULL AND raw_path IS NOT NULL
-        """).fetchall()
-
-        if missing:
-            backfilled = 0
-            for row in missing:
-                p = Path(row["raw_path"])
-                if p.exists():
-                    text = p.read_text(encoding="utf-8", errors="replace")
-                    # Strip the YAML frontmatter header before hashing
-                    if text.startswith("---\n"):
-                        end = text.find("---\n", 4)
-                        if end != -1:
-                            text = text[end + 4:].lstrip()
-                    h = hashlib.sha256(text.strip().encode()).hexdigest()
-                    conn.execute("UPDATE writeups SET content_hash=? WHERE id=?", (h, row["id"]))
-                    backfilled += 1
+        backfilled = backfill_content_hashes(conn)
+        if backfilled:
             console.print(f"Backfilled content hashes for [cyan]{backfilled}[/] writeups")
 
         dupes = find_duplicates(conn)
@@ -402,24 +351,38 @@ def promote(threshold):
 @click.option("--fetch-limit", default=500, help="Max writeups to fetch")
 @click.option("--classify-limit", default=100, help="Max writeups to classify")
 def run_all(max_events, max_repos, fetch_limit, classify_limit):
-    """Run the full pipeline: scrape -> fetch -> classify -> build."""
+    """Run the full pipeline: scrape -> fetch -> clean -> classify -> build."""
     console.rule("[bold magenta]CTF Playbook Builder — Full Pipeline")
 
-    console.print("\n[bold]Stage 1/4:[/] Scraping...")
+    console.print("\n[bold]Stage 1/5:[/] Scraping...")
     from ctf_playbook.scrapers.ctftime import run as run_ctftime
     from ctf_playbook.scrapers.github import run as run_github
+    from ctf_playbook.scrapers.github import EXCLUDED_REPOS
     run_ctftime(max_events=max_events)
     run_github(max_repos=max_repos)
 
-    console.print("\n[bold]Stage 2/4:[/] Fetching content...")
+    console.print("\n[bold]Stage 2/5:[/] Fetching content...")
     from ctf_playbook.services.fetcher import run as run_fetcher
     run_fetcher(limit=fetch_limit)
 
-    console.print("\n[bold]Stage 3/4:[/] Classifying...")
+    console.print("\n[bold]Stage 3/5:[/] Cleaning & deduplicating...")
+    from ctf_playbook.db import (
+        backfill_content_hashes, clean_junk_writeups, deduplicate,
+    )
+    with db_session() as conn:
+        backfill_content_hashes(conn)
+        cleaned = clean_junk_writeups(conn, excluded_repos=EXCLUDED_REPOS)
+        removed = deduplicate(conn)
+        if cleaned or removed:
+            console.print(
+                f"  Cleaned {cleaned} junk, removed {removed} duplicates"
+            )
+
+    console.print("\n[bold]Stage 4/5:[/] Classifying...")
     from ctf_playbook.services.classifier import run as run_classifier
     run_classifier(limit=classify_limit)
 
-    console.print("\n[bold]Stage 4/4:[/] Building playbook...")
+    console.print("\n[bold]Stage 5/5:[/] Building playbook...")
     from ctf_playbook.services.builder import run as run_builder
     run_builder()
 

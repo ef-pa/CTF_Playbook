@@ -10,7 +10,7 @@ wheels/
 .venv
 
 # Data artifacts
-playbook.db
+*.db
 playbook/
 
 # Environment

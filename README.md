@@ -7,24 +7,27 @@ and organizes everything into a technique-based playbook designed to help solve 
 ## Architecture
 
 ```
-┌─────────────┐     ┌──────────────┐     ┌───────────────┐     ┌──────────────┐
-│  1. Scrape  │───▶│  2. Fetch     │───▶│  3. Classify  │───▶│  4. Build    │
-│  (discover) │     │  (content)   │     │  (taxonomy)   │     │ (playbook)   │
-└─────────────┘     └──────────────┘     └───────────────┘     └──────────────┘
+┌─────────────┐     ┌──────────────┐     ┌───────────────┐     ┌───────────────┐     ┌──────────────┐
+│  1. Scrape  │───▶│  2. Fetch     │───▶│  3. Clean     │───▶│  4. Classify  │────▶│  5. Build    │
+│  (discover) │     │  (content)   │     │  (dedup/junk) │     │  (taxonomy)   │     │ (playbook)   │
+└─────────────┘     └──────────────┘     └───────────────┘     └───────────────┘     └──────────────┘
 ```
 
 ### Stages
 
 1. **Scrape** (`ctf_playbook/scrapers/`) — Crawl CTFtime events + tasks + writeup links; discover GitHub repos. Stores metadata in SQLite.
 2. **Fetch** (`ctf_playbook/services/fetcher.py`) — Download writeup content (HTML->text via trafilatura, raw markdown). Filters out junk (link indexes, too-short content). Saves to `playbook/raw-writeups/`.
-3. **Classify** (`ctf_playbook/services/classifier.py`) — Send fetched writeups to the Claude API for structured analysis. Extracts: techniques, tools, recognition signals, solve steps, difficulty. Stores results as JSON in the DB.
-4. **Build** (`ctf_playbook/services/builder.py`) — Generate the playbook folder structure from classified data. Creates `_pattern.md` files per technique aggregating recognition signals, common tools, and solve flows.
+3. **Clean** (automatic) — Runs automatically before classification. Backfills content hashes, removes writeups from excluded repos, re-checks content quality, and deduplicates by content hash. No LLM tokens wasted on junk or duplicates.
+4. **Classify** (`ctf_playbook/services/classifier.py`) — Send fetched writeups to the Claude API for structured analysis. Extracts: techniques (with sub-techniques), tools, recognition signals, solve steps, difficulty. Stores results as JSON in the DB.
+5. **Build** (`ctf_playbook/services/builder.py`) — Three-phase pipeline: assemble structured data from DB, export `playbook.json` (single source of truth), then render browsable markdown files.
 
 ## Key Design Decisions
 
 - **Organized by technique within categories.** A heap exploit and a format string bug are both "pwn" but have totally different solve paths. The playbook groups by what-you-actually-do, with optional sub-techniques for finer granularity (e.g., XSS splits into reflected, stored, DOM).
+- **Data model first, views second.** The builder assembles a structured `playbook.json` from the database, then renders markdown as one view of that data. The JSON is the single source of truth — a GUI or API can consume it directly without parsing markdown.
 - **SQLite as the central index.** Every writeup has a `fetch_status` and `class_status` so you can resume any stage. Content-hash deduplication detects the same writeup found via different sources.
-- **Taxonomy is defined in `ctf_playbook/taxonomy.py`** as a dict. The classifier maps writeups into this taxonomy but can also discover new technique slugs not in the original list.
+- **Self-improving taxonomy.** `ctf_playbook/taxonomy.py` defines the canonical categories and techniques. The classifier can discover new technique slugs not in the taxonomy — keyword-based inference auto-categorizes them by scoring slug tokens against category keyword sets derived from the taxonomy itself. Adding techniques to the taxonomy automatically expands the keyword index.
+- **Automatic cleanup.** Running `classify` or `all` automatically deduplicates and removes junk before spending LLM tokens. No manual `dedup`/`clean` step needed.
 - **Layered architecture.** Configuration, taxonomy data, data access (db), and service logic (classify, build, fetch) are separated so a GUI or API can reuse the same services without importing CLI code.
 
 ## Project Structure
@@ -50,16 +53,19 @@ CTF_Playbook/
 │       ├── fetcher.py                # URL fetcher with per-domain rate limiting
 │       ├── classifier.py             # LLM classification with hierarchical technique output
 │       └── builder.py                # Playbook + sub-technique file generation
-├── tests/                            # pytest suite
-│   ├── test_config.py                # Taxonomy structure + sub-technique tests
-│   ├── test_db.py                    # CRUD, sub-technique tracking, soft reset tests
-│   ├── test_fetcher.py
-│   └── test_github_parser.py
+├── tests/                            # pytest suite (184 tests)
+│   ├── test_config.py                # Taxonomy structure, sub-techniques, category inference
+│   ├── test_db.py                    # CRUD, sub-technique tracking, dedup, soft reset
+│   ├── test_builder.py               # Builder pipeline: serialization, rendering, cross-refs
+│   ├── test_models.py                # TechniqueMatch, ClassificationResult
+│   ├── test_fetcher.py               # URL generation, content quality checks
+│   └── test_github_parser.py         # Path parsing, category aliases, repo filtering
 └── playbook/                         # Output (generated at runtime, gitignored)
+    ├── playbook.json                 # Structured data (single source of truth for GUI/API)
+    ├── INDEX.md                      # Master index with all techniques
     ├── techniques/                   # category/technique/_pattern.md + sub-technique .md files
-    ├── recon-patterns/
-    ├── toolchains/
-    └── raw-writeups/
+    ├── recon-patterns/               # Per-category recognition signal quick-reference
+    └── raw-writeups/                 # Downloaded writeup content
 ```
 
 ## Setup
@@ -77,14 +83,16 @@ export ANTHROPIC_API_KEY="sk-..."    # Required for the classify stage
 ## Usage
 
 ```bash
-# Run the full pipeline
+# Run the full pipeline (scrape -> fetch -> clean/dedup -> classify -> build)
 uv run ctf-playbook all
 
 # Or run individual stages
 uv run ctf-playbook scrape          # Discover writeups from CTFtime + GitHub
 uv run ctf-playbook fetch           # Download writeup content
-uv run ctf-playbook classify        # Extract techniques via LLM
-uv run ctf-playbook build           # Generate the playbook folder structure
+uv run ctf-playbook classify        # Extract techniques via LLM (auto-cleans first)
+uv run ctf-playbook build           # Generate playbook.json + markdown files
+uv run ctf-playbook export          # Export playbook.json only (no markdown)
+uv run ctf-playbook export -o out.json  # Export to a custom path
 
 # Stage options
 uv run ctf-playbook scrape --max-events 100     # Limit CTFtime events
@@ -135,6 +143,7 @@ playbook/techniques/
   cryptography/
     rsa-attacks/
       _pattern.md              # Technique overview + sub-technique table
+      _recon.md                # Decision tree: which RSA sub-technique?
       coppersmith.md           # Sub-technique pattern file
       wiener.md
       hastad.md
@@ -143,14 +152,28 @@ playbook/techniques/
   web/
     xss/
       _pattern.md
+      _recon.md                # Decision tree: reflected vs stored vs DOM?
       reflected-xss.md
       stored-xss.md
       dom-xss.md
 ```
 
-- `_pattern.md` — technique overview with recognition signals, tools, solve flow, and examples
-- `{sub-technique}.md` — same structure, scoped to a specific sub-technique
+- `_pattern.md` — technique overview with recognition signals, tools, solve flow, examples, and cross-references ("See Also" links to related techniques)
+- `_recon.md` — decision tree for techniques with 2+ sub-techniques, helping distinguish which sub-technique applies based on observable signals
+- `{sub-technique}.md` — same structure as `_pattern.md`, scoped to a specific sub-technique
 - Not all techniques have sub-techniques — most are just `_pattern.md`
+
+### Cross-References
+
+The builder mines co-occurring techniques from writeups (challenges that use multiple techniques together) and adds "See Also" sections to pattern files. For example, if `padding-oracle` and `cbc-bit-flipping` frequently appear together, each technique's pattern file will link to the other. This helps when one approach doesn't work — you can quickly pivot to related techniques.
+
+### Category Inference
+
+Techniques discovered by the classifier that aren't in the canonical taxonomy are auto-categorized using keyword-based inference. Slug tokens are scored against per-category keyword sets derived from:
+1. Existing taxonomy technique slugs (e.g., "heap" from `heap-exploitation` scores for binary-exploitation)
+2. Domain-specific supplements (e.g., "php", "dom" for web; "ecdsa", "nonce" for cryptography)
+
+Tokens appearing in 3+ categories are pruned as too generic. Ties between two non-misc categories return unknown (stays in misc). This is self-improving — adding techniques to the taxonomy automatically expands the keyword index.
 
 ### Sub-Technique Discovery
 
@@ -162,5 +185,27 @@ Discovered sub-techniques are tracked in the database with occurrence counts. On
 sub-technique appears in 3+ writeups, it becomes a **promotion candidate**. Use
 `ctf-playbook promote` to review and approve candidates.
 
-Recon-pattern files provide the reverse lookup: from what you observe in a challenge
-to which technique to try first.
+### Playbook Data Model
+
+The build stage produces `playbook.json` as the single source of truth. Structure:
+
+```json
+{
+  "metadata": { "generated_at": "...", "technique_count": 140, ... },
+  "techniques": {
+    "buffer-overflow": {
+      "category": "binary-exploitation",
+      "signals": ["stack smashing", "segfault on input"],
+      "tools": ["gdb", "pwntools", "checksec"],
+      "solve_steps": ["Check protections", "Find offset", ...],
+      "examples": [{ "challenge": "...", "event": "...", "year": 2024, "url": "..." }],
+      "cross_references": [{ "technique": "rop-chains", "count": 5 }],
+      "sub_techniques": { ... }
+    }
+  },
+  "recon_patterns": { ... },
+  "tool_reference": [ ... ]
+}
+```
+
+Markdown files are rendered from this data. A GUI or API can consume `playbook.json` directly.

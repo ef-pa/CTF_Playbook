@@ -496,6 +496,93 @@ def search_writeups(conn: sqlite3.Connection, query: str = None,
     """, params + [limit]).fetchall()
 
 
+# ── Pre-classification cleanup ───────────────────────────────────────────
+
+def backfill_content_hashes(conn: sqlite3.Connection) -> int:
+    """Backfill SHA-256 content hashes for writeups missing them.
+
+    Returns the number of hashes backfilled.
+    """
+    import hashlib
+
+    rows = conn.execute("""
+        SELECT id, raw_path FROM writeups
+        WHERE fetch_status='fetched' AND content_hash IS NULL AND raw_path IS NOT NULL
+    """).fetchall()
+
+    backfilled = 0
+    for row in rows:
+        p = Path(row["raw_path"])
+        if p.exists():
+            text = p.read_text(encoding="utf-8", errors="replace")
+            # Strip YAML frontmatter before hashing
+            if text.startswith("---\n"):
+                end = text.find("---\n", 4)
+                if end != -1:
+                    text = text[end + 4:].lstrip()
+            h = hashlib.sha256(text.strip().encode()).hexdigest()
+            conn.execute("UPDATE writeups SET content_hash=? WHERE id=?", (h, row["id"]))
+            backfilled += 1
+
+    return backfilled
+
+
+def clean_junk_writeups(conn: sqlite3.Connection,
+                        excluded_repos: set[str] | None = None) -> int:
+    """Remove junk writeups: excluded repos + content quality recheck.
+
+    Returns the total number of writeups cleaned.
+    """
+    from ctf_playbook.services.fetcher import is_useful_writeup
+
+    cleaned = 0
+
+    # Phase 1: Mark writeups from excluded repos as failed
+    if excluded_repos:
+        for repo in excluded_repos:
+            rows = conn.execute("""
+                SELECT id, raw_path FROM writeups
+                WHERE url LIKE ? AND fetch_status != 'failed'
+            """, (f"%{repo}%",)).fetchall()
+
+            for row in rows:
+                if row["raw_path"]:
+                    Path(row["raw_path"]).unlink(missing_ok=True)
+                conn.execute(
+                    "UPDATE writeups SET fetch_status='failed', raw_path=NULL WHERE id=?",
+                    (row["id"],))
+                cleaned += 1
+
+    # Phase 2: Re-check fetched content quality
+    rows = conn.execute("""
+        SELECT id, raw_path FROM writeups
+        WHERE fetch_status = 'fetched' AND raw_path IS NOT NULL
+    """).fetchall()
+
+    for row in rows:
+        p = Path(row["raw_path"])
+        if not p.exists():
+            conn.execute("UPDATE writeups SET fetch_status='failed' WHERE id=?", (row["id"],))
+            cleaned += 1
+            continue
+
+        text = p.read_text(encoding="utf-8", errors="replace")
+        # Strip YAML frontmatter before checking
+        if text.startswith("---\n"):
+            end = text.find("---\n", 4)
+            if end != -1:
+                text = text[end + 4:]
+
+        if not is_useful_writeup(text):
+            p.unlink(missing_ok=True)
+            conn.execute(
+                "UPDATE writeups SET fetch_status='failed', raw_path=NULL WHERE id=?",
+                (row["id"],))
+            cleaned += 1
+
+    return cleaned
+
+
 if __name__ == "__main__":
     init_db()
     print(f"Database initialized at {DB_PATH}")
