@@ -1,5 +1,10 @@
 {% extends "base.html" %}
 {% block content %}
+<nav class="breadcrumb">
+    <a href="/">Dashboard</a>
+    <span class="sep">/</span>
+    <span>{{ slug_to_title(category) }}</span>
+</nav>
 <h1>{{ slug_to_title(category) }}</h1>
 <p class="section-hint">{{ techniques|length }} technique{{ "s" if techniques|length != 1 }} in this category.</p>
 

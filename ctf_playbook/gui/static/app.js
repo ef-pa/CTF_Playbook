@@ -15,6 +15,15 @@ document.addEventListener("DOMContentLoaded", function () {
         });
     }
 
+    /* Close sidebar on link click (mobile) */
+    if (sidebar) {
+        sidebar.querySelectorAll("a").forEach(function (link) {
+            link.addEventListener("click", function () {
+                sidebar.classList.remove("open");
+            });
+        });
+    }
+
     /* ── Smooth scroll to sub-technique anchors ───────────────── */
     if (window.location.hash) {
         var target = document.querySelector(window.location.hash);
@@ -73,4 +82,30 @@ document.addEventListener("DOMContentLoaded", function () {
 
         rows.forEach(function (row) { tbody.appendChild(row); });
     }
+
+    /* ── Table filter (tools page) ───────────────────────────────── */
+    document.querySelectorAll(".table-filter input").forEach(function (input) {
+        var table = input.closest(".card, main").querySelector("table");
+        if (!table) return;
+        var countEl = input.parentElement.querySelector(".filter-count");
+        var tbody = table.querySelector("tbody");
+        var rows = Array.from(tbody.querySelectorAll("tr"));
+        var total = rows.length;
+
+        input.addEventListener("input", function () {
+            var q = input.value.toLowerCase();
+            var visible = 0;
+            rows.forEach(function (row) {
+                var text = row.textContent.toLowerCase();
+                var show = !q || text.indexOf(q) !== -1;
+                row.style.display = show ? "" : "none";
+                if (show) visible++;
+            });
+            if (countEl) {
+                countEl.textContent = q ? visible + " of " + total : total + " tools";
+            }
+        });
+
+        if (countEl) countEl.textContent = total + " tools";
+    });
 });

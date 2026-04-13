@@ -12,8 +12,19 @@ _GUI_DIR = Path(__file__).parent
 TEMPLATES = Jinja2Templates(directory=str(_GUI_DIR / "templates"))
 
 
+_ACRONYMS = {
+    "sql", "xss", "xxe", "css", "rsa", "aes", "des", "rce", "lfi", "rfi",
+    "ssrf", "csrf", "idor", "jwt", "xml", "php", "rop", "got", "plt",
+    "dns", "tcp", "udp", "http", "smtp", "ftp", "ssh", "tls", "ssl",
+    "api", "cbc", "ecb", "gcm", "ecc", "dsa", "ecdsa", "sha", "md5",
+    "aes", "rc4", "xor", "dom", "ssti", "iot", "usb", "pdf", "png",
+    "pcap", "osint", "dfir", "bof", "uaf",
+}
+
+
 def _slug_to_title(slug: str) -> str:
-    return slug.replace("-", " ").title()
+    words = slug.replace("-", " ").split()
+    return " ".join(w.upper() if w.lower() in _ACRONYMS else w.capitalize() for w in words)
 
 
 def create_app() -> FastAPI:

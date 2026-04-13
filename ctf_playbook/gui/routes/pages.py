@@ -6,7 +6,7 @@ from collections import Counter
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
 
-from ctf_playbook.gui.app import TEMPLATES
+from ctf_playbook.gui.app import TEMPLATES, _slug_to_title
 from ctf_playbook.gui.data import (
     get_playbook, get_technique, get_techniques_by_category, search_db,
 )
@@ -36,11 +36,14 @@ async def index(request: Request):
 
     tree = get_techniques_by_category()
 
+    generated_at = pb.get("generated_at", "")
+
     return TEMPLATES.TemplateResponse(request, "index.html", {
         "stats": stats,
         "cat_counts": cat_counts.most_common(),
         "diff_counts": diff_counts.most_common(),
         "tree": tree,
+        "generated_at": generated_at,
         "page_title": "Dashboard",
     })
 
@@ -62,7 +65,7 @@ async def technique_detail(request: Request, slug: str):
         "slug": slug,
         "tech": tech,
         "tree": tree,
-        "page_title": slug.replace("-", " ").title(),
+        "page_title": _slug_to_title(slug),
     })
 
 
@@ -90,7 +93,7 @@ async def category_overview(request: Request, category: str):
         "category": category,
         "techniques": cat_techniques,
         "tree": tree,
-        "page_title": category.replace("-", " ").title(),
+        "page_title": _slug_to_title(category),
     })
 
 
@@ -134,6 +137,20 @@ async def search_page(request: Request, q: str = "", technique: str = "",
         "all_techniques": all_techniques,
         "tree": tree,
         "page_title": "Search",
+    })
+
+
+@router.get("/recon", response_class=HTMLResponse)
+async def recon_patterns(request: Request):
+    """Recon patterns page — per-category recognition signals for triage."""
+    pb = get_playbook()
+    recon = pb.get("recon_patterns", {})
+    tree = get_techniques_by_category()
+
+    return TEMPLATES.TemplateResponse(request, "recon.html", {
+        "recon_patterns": recon,
+        "tree": tree,
+        "page_title": "Recon Patterns",
     })
 
 
