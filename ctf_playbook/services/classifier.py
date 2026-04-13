@@ -5,6 +5,7 @@ and stores the extracted metadata back in the database.
 """
 
 import json
+import time
 from pathlib import Path
 
 from anthropic import Anthropic, APIConnectionError, APITimeoutError, RateLimitError
@@ -21,7 +22,10 @@ _TRANSIENT_ERRORS = (APIConnectionError, APITimeoutError, RateLimitError,
 
 class TransientAPIError(Exception):
     """Raised when the API fails for a reason unrelated to the writeup content."""
-    pass
+
+    def __init__(self, message: str, retry_after: float | None = None):
+        super().__init__(message)
+        self.retry_after = retry_after
 
 from ctf_playbook.config import ANTHROPIC_API_KEY, CLASSIFIER_MODEL, CLASSIFIER_MAX_TOKENS
 from ctf_playbook.taxonomy import TAXONOMY, TECHNIQUE_TO_CATEGORY, get_category, all_sub_slugs
@@ -157,7 +161,15 @@ Analyze this writeup and extract the technique information as JSON."""
         console.print(f"  [yellow]JSON parse error:[/] {e}")
         return None  # permanent — the LLM returned unparseable output
     except _TRANSIENT_ERRORS as e:
-        raise TransientAPIError(str(e)) from e
+        retry_after = None
+        if isinstance(e, RateLimitError) and hasattr(e, "response"):
+            raw = e.response.headers.get("retry-after")
+            if raw:
+                try:
+                    retry_after = float(raw)
+                except (ValueError, TypeError):
+                    pass
+        raise TransientAPIError(str(e), retry_after=retry_after) from e
     except Exception as e:
         console.print(f"  [red]Unexpected error:[/] {e}")
         return None  # permanent — unknown issue with this specific writeup
@@ -213,22 +225,45 @@ def run(limit: int = 100, category: str = None):
                 try:
                     result = classify_writeup(content, challenge_name, cat)
                 except TransientAPIError as e:
-                    # API is down, rate limited, or out of credits.
-                    # Leave the writeup as 'pending' so it gets retried next run.
-                    consecutive_transient += 1
-                    skipped += 1
-                    console.print(f"  [yellow]API unavailable:[/] {e}")
-
-                    if consecutive_transient >= max_consecutive_transient:
+                    # Rate limit: wait and retry the same writeup
+                    if e.retry_after:
+                        wait = min(e.retry_after, 120)  # cap at 2 minutes
                         console.print(
-                            f"\n[red]Stopping:[/] {consecutive_transient} consecutive "
-                            f"API failures — likely out of credits or rate limited. "
-                            f"Remaining writeups left as pending for next run."
+                            f"  [yellow]Rate limited:[/] waiting {wait:.0f}s..."
                         )
-                        break
+                        time.sleep(wait)
+                        try:
+                            result = classify_writeup(content, challenge_name, cat)
+                        except TransientAPIError:
+                            # Still failing after wait — count as transient
+                            consecutive_transient += 1
+                            skipped += 1
+                            if consecutive_transient >= max_consecutive_transient:
+                                console.print(
+                                    f"\n[red]Stopping:[/] {consecutive_transient} "
+                                    f"consecutive API failures. "
+                                    f"Remaining writeups left as pending."
+                                )
+                                break
+                            progress.update(task, advance=1)
+                            continue
+                    else:
+                        # Non-rate-limit transient error (connection, auth, etc.)
+                        consecutive_transient += 1
+                        skipped += 1
+                        console.print(f"  [yellow]API unavailable:[/] {e}")
 
-                    progress.update(task, advance=1)
-                    continue
+                        if consecutive_transient >= max_consecutive_transient:
+                            console.print(
+                                f"\n[red]Stopping:[/] {consecutive_transient} "
+                                f"consecutive API failures — likely out of credits "
+                                f"or unreachable. "
+                                f"Remaining writeups left as pending."
+                            )
+                            break
+
+                        progress.update(task, advance=1)
+                        continue
 
                 # Reset transient counter on any non-transient outcome
                 consecutive_transient = 0
