@@ -50,12 +50,13 @@ def _url_to_filename(url: str, challenge_name: str = "") -> str:
     return f"{url_hash}.md"
 
 
-def fetch_github_raw(url: str) -> str | None:
-    """Fetch raw content from a GitHub raw URL or regular GitHub URL."""
+def fetch_github_raw(url: str) -> tuple[str | None, str | None]:
+    """Fetch raw content from a GitHub raw URL or regular GitHub URL.
+
+    Returns (content, failure_reason).
+    """
     # Convert github.com URLs to raw.githubusercontent.com
     if "github.com" in url and "raw.githubusercontent.com" not in url:
-        # Convert blob URLs: github.com/user/repo/blob/branch/path
-        # to raw: raw.githubusercontent.com/user/repo/branch/path
         raw_url = url.replace("github.com", "raw.githubusercontent.com")
         raw_url = raw_url.replace("/blob/", "/")
     else:
@@ -64,26 +65,37 @@ def fetch_github_raw(url: str) -> str | None:
     try:
         _domain_delay(raw_url)
         resp = SESSION.get(raw_url, timeout=FETCH_TIMEOUT)
-        if resp.status_code == 200 and len(resp.content) < FETCH_MAX_SIZE:
-            return resp.text
-    except requests.RequestException:
-        pass
-    return None
+        if resp.status_code != 200:
+            return None, f"HTTP {resp.status_code}"
+        if len(resp.content) >= FETCH_MAX_SIZE:
+            return None, f"too large ({len(resp.content)} bytes)"
+        return resp.text, None
+    except requests.Timeout:
+        return None, "timeout"
+    except requests.ConnectionError:
+        return None, "connection error"
+    except requests.RequestException as e:
+        return None, str(e)
 
 
-def fetch_webpage(url: str) -> str | None:
-    """Fetch a webpage and extract its main content as text."""
+def fetch_webpage(url: str) -> tuple[str | None, str | None]:
+    """Fetch a webpage and extract its main content as text.
+
+    Returns (content, failure_reason).
+    """
     try:
         _domain_delay(url)
         resp = SESSION.get(url, timeout=FETCH_TIMEOUT)
-        if resp.status_code != 200 or len(resp.content) > FETCH_MAX_SIZE:
-            return None
+        if resp.status_code != 200:
+            return None, f"HTTP {resp.status_code}"
+        if len(resp.content) > FETCH_MAX_SIZE:
+            return None, f"too large ({len(resp.content)} bytes)"
 
         content_type = resp.headers.get("content-type", "")
 
         # If it's already markdown or plain text, return as-is
         if "text/markdown" in content_type or "text/plain" in content_type:
-            return resp.text
+            return resp.text, None
 
         # For HTML, extract the main content
         if "text/html" in content_type or "<html" in resp.text[:500].lower():
@@ -93,35 +105,42 @@ def fetch_webpage(url: str) -> str | None:
                 include_tables=True,
                 output_format="txt",
             )
-            if extracted and len(extracted) > 100:  # skip near-empty extractions
-                return extracted
+            if extracted and len(extracted) > 100:
+                return extracted, None
 
             # Fallback: trafilatura failed, try a simple extraction
             from bs4 import BeautifulSoup
             soup = BeautifulSoup(resp.text, "lxml")
-            # Remove script/style tags
             for tag in soup(["script", "style", "nav", "header", "footer"]):
                 tag.decompose()
             text = soup.get_text(separator="\n", strip=True)
             if len(text) > 200:
-                return text
+                return text, None
+
+            return None, "extraction failed (no readable content)"
 
         # For JSON (some APIs return writeups as JSON)
         if "application/json" in content_type:
             import json
             try:
                 data = resp.json()
-                # Try common fields
                 for field in ("content", "body", "text", "description"):
                     if field in data and isinstance(data[field], str):
-                        return data[field]
+                        return data[field], None
             except json.JSONDecodeError:
                 pass
+            return None, "JSON without recognized content field"
 
-        return resp.text if len(resp.text) > 100 else None
+        if len(resp.text) > 100:
+            return resp.text, None
+        return None, "response too short"
 
-    except requests.RequestException:
-        return None
+    except requests.Timeout:
+        return None, "timeout"
+    except requests.ConnectionError:
+        return None, "connection error"
+    except requests.RequestException as e:
+        return None, str(e)
 
 
 def is_useful_writeup(content: str) -> bool:
@@ -159,20 +178,24 @@ def is_useful_writeup(content: str) -> bool:
     return True
 
 
-def fetch_writeup(url: str) -> str | None:
-    """Fetch a writeup from any URL, dispatching to the right method."""
+def fetch_writeup(url: str) -> tuple[str | None, str | None]:
+    """Fetch a writeup from any URL, dispatching to the right method.
+
+    Returns (content, failure_reason).
+    """
     domain = urlparse(url).netloc.lower()
 
     if "github" in domain or "raw.githubusercontent.com" in domain:
-        content = fetch_github_raw(url)
+        content, reason = fetch_github_raw(url)
         if content:
-            return content
+            return content, None
+        # Fall through to generic fetch on GitHub failure
 
     if "ctftime.org" in domain:
-        # CTFtime writeup pages contain the writeup inline sometimes
-        content = fetch_webpage(url)
+        content, reason = fetch_webpage(url)
         if content:
-            return content
+            return content, None
+        return None, reason
 
     # Generic webpage fetch
     return fetch_webpage(url)
@@ -192,8 +215,15 @@ def run(limit: int = 500):
             console.print("[green]Nothing to fetch!")
             return
 
+        # Failure reasons that are permanent — no point retrying
+        _PERMANENT = {"HTTP 404", "HTTP 403", "HTTP 410", "HTTP 451",
+                      "extraction failed (no readable content)",
+                      "JSON without recognized content field",
+                      "response too short"}
+
         success = 0
         failed = 0
+        fail_reasons: dict[str, int] = {}
 
         with Progress(SpinnerColumn(),
                       TextColumn("[progress.description]{task.description}"),
@@ -205,19 +235,23 @@ def run(limit: int = 500):
                 url = row["url"]
                 challenge_name = row["challenge_name"] or ""
 
-                content = fetch_writeup(url)
+                content, reason = fetch_writeup(url)
 
-                # Retry once on failure
-                if not content or not is_useful_writeup(content):
+                # Quality check
+                if content and not is_useful_writeup(content):
+                    content, reason = None, "not a writeup (link dump or too short)"
+
+                # Retry once on transient failures only
+                if not content and reason not in _PERMANENT:
                     time.sleep(FETCH_DELAY)
-                    content = fetch_writeup(url)
+                    content, reason = fetch_writeup(url)
+                    if content and not is_useful_writeup(content):
+                        content, reason = None, "not a writeup (link dump or too short)"
 
-                if content and is_useful_writeup(content):
-                    # Save to file
+                if content:
                     filename = _url_to_filename(url, challenge_name)
                     filepath = RAW_WRITEUPS_DIR / filename
 
-                    # Add metadata header
                     header = (
                         f"---\n"
                         f"source_url: {url}\n"
@@ -230,14 +264,14 @@ def run(limit: int = 500):
                     full_content = header + content
                     filepath.write_text(full_content, encoding="utf-8")
 
-                    # Hash the raw content (not header) for dedup
                     content_hash = hashlib.sha256(content.strip().encode()).hexdigest()
-
                     mark_fetched(conn, writeup_id, str(filepath), content_hash)
                     success += 1
                 else:
                     mark_fetch_failed(conn, writeup_id)
                     failed += 1
+                    reason = reason or "unknown"
+                    fail_reasons[reason] = fail_reasons.get(reason, 0) + 1
 
                 progress.update(
                     task, advance=1,
@@ -245,6 +279,10 @@ def run(limit: int = 500):
                 )
 
         console.print(f"\n[green]Done![/] Fetched {success}, failed {failed}")
+        if fail_reasons:
+            console.print("\n[yellow]Failure breakdown:[/]")
+            for reason, count in sorted(fail_reasons.items(), key=lambda x: -x[1]):
+                console.print(f"  {reason}: {count}")
 
 
 if __name__ == "__main__":

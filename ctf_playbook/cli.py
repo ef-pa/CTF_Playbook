@@ -58,13 +58,14 @@ def fetch(limit):
 @cli.command()
 @click.option("--limit", default=100, help="Max writeups to classify")
 @click.option("--category", default=None, help="Only classify this CTF category")
-def classify(limit, category):
+@click.option("--workers", "-w", default=10, help="Concurrent API workers (1=sequential)")
+def classify(limit, category, workers):
     """Stage 3: Classify writeups using LLM analysis."""
     from ctf_playbook.scrapers.github import EXCLUDED_REPOS
     from ctf_playbook.db import (
         backfill_content_hashes, clean_junk_writeups, deduplicate,
     )
-    from ctf_playbook.services.classifier import run as run_classifier
+    from ctf_playbook.services.runner import run as run_classifier
 
     console.print("[dim]Running pre-classification cleanup...[/]")
     with db_session() as conn:
@@ -76,7 +77,7 @@ def classify(limit, category):
                 f"  Cleaned {cleaned} junk, removed {removed} duplicates"
             )
 
-    run_classifier(limit=limit, category=category)
+    run_classifier(limit=limit, category=category, workers=workers)
 
 
 @cli.command()
@@ -580,7 +581,7 @@ def run_all(max_events, max_repos, fetch_limit, classify_limit):
             )
 
     console.print("\n[bold]Stage 4/5:[/] Classifying...")
-    from ctf_playbook.services.classifier import run as run_classifier
+    from ctf_playbook.services.runner import run as run_classifier
     run_classifier(limit=classify_limit)
 
     console.print("\n[bold]Stage 5/5:[/] Building playbook...")

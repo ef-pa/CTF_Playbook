@@ -1,48 +1,50 @@
 """Classify writeups using an LLM to extract techniques, tools, and solve patterns.
 
-Reads fetched writeup content, sends it to Gemini for structured analysis,
-and stores the extracted metadata back in the database.
+Pure classification logic: prompt building, Gemini API calls, response parsing,
+and output sanitization. No DB access, no orchestration — see runner.py for that.
 """
 
 import json
+import threading
 import time
-from pathlib import Path
 
 from google import genai
 from google.genai import types, errors
 from rich.console import Console
-from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn
 
 from ctf_playbook.config import GEMINI_API_KEY, GEMINI_MODEL, GEMINI_RPM
-from ctf_playbook.taxonomy import TAXONOMY, TECHNIQUE_TO_CATEGORY, get_category, all_sub_slugs
+from ctf_playbook.taxonomy import TAXONOMY
 from ctf_playbook.models import ClassificationResult, TechniqueMatch
-from ctf_playbook.db import (
-    db_session, get_unclassified, mark_classified, mark_class_failed,
-    infer_category, backfill_challenge_category, record_sub_technique,
-)
 
 console = Console()
 
 _client: genai.Client | None = None
-_last_request = 0.0  # timestamp of last API call
+_client_lock = threading.Lock()
+
+# Thread-safe rate limiter
+_rate_lock = threading.Lock()
+_last_request = 0.0
 
 
 def _get_client() -> genai.Client | None:
-    """Lazily create the Gemini client."""
+    """Lazily create the Gemini client (thread-safe)."""
     global _client
-    if _client is None and GEMINI_API_KEY:
-        _client = genai.Client(api_key=GEMINI_API_KEY)
+    if _client is None:
+        with _client_lock:
+            if _client is None and GEMINI_API_KEY:
+                _client = genai.Client(api_key=GEMINI_API_KEY)
     return _client
 
 
 def _rate_limit():
-    """Sleep if needed to stay within Gemini free tier RPM."""
+    """Sleep if needed to stay within Gemini RPM."""
     global _last_request
-    min_interval = 60.0 / GEMINI_RPM  # 4s at 15 RPM
-    elapsed = time.time() - _last_request
-    if elapsed < min_interval:
-        time.sleep(min_interval - elapsed)
-    _last_request = time.time()
+    min_interval = 60.0 / GEMINI_RPM
+    with _rate_lock:
+        elapsed = time.time() - _last_request
+        if elapsed < min_interval:
+            time.sleep(min_interval - elapsed)
+        _last_request = time.time()
 
 
 class TransientAPIError(Exception):
@@ -158,6 +160,21 @@ Analyze this writeup and extract the technique information as JSON. Remember: us
         raw_techniques = data.get("techniques", [])
         technique_matches = [TechniqueMatch.from_dict(t) for t in raw_techniques]
 
+        # Sanitize LLM output quirks
+        _CATEGORIES = {"binary-exploitation", "web", "cryptography",
+                       "reverse-engineering", "forensics", "misc"}
+        for tm in technique_matches:
+            # Strip duplicated technique prefix from sub-technique
+            # e.g. sub="heap-exploitation/tcache-poisoning" -> "tcache-poisoning"
+            if tm.sub_technique and tm.sub_technique.startswith(tm.technique + "/"):
+                tm.sub_technique = tm.sub_technique[len(tm.technique) + 1:]
+
+            # Promote sub-technique when LLM used a category name as technique
+            # e.g. technique="cryptography", sub="chosen-plaintext-attack"
+            if tm.technique in _CATEGORIES and tm.sub_technique:
+                tm.technique = tm.sub_technique
+                tm.sub_technique = None
+
         # Build flat recognition/steps from per-technique data, with
         # top-level fields as fallback for backward compat
         result = ClassificationResult(
@@ -191,163 +208,3 @@ Analyze this writeup and extract the technique information as JSON. Remember: us
     except Exception as e:
         console.print(f"  [red]Unexpected error:[/] {e}")
         return None  # permanent — unknown issue with this specific writeup
-
-
-def run(limit: int = 100, category: str = None):
-    """Main entry point: classify unclassified writeups."""
-    console.rule("[bold blue]Writeup Classifier")
-
-    if not GEMINI_API_KEY:
-        console.print("[red]Set GEMINI_API_KEY to use the classifier[/]")
-        return
-
-    with db_session() as conn:
-        unclassified = get_unclassified(conn, limit=limit, category=category)
-        console.print(f"Found [yellow]{len(unclassified)}[/] unclassified writeups")
-
-        if not unclassified:
-            console.print("[green]Nothing to classify!")
-            return
-
-        success = 0
-        failed = 0
-        skipped = 0
-        consecutive_transient = 0
-        max_consecutive_transient = 3
-
-        with Progress(SpinnerColumn(),
-                      TextColumn("[progress.description]{task.description}"),
-                      BarColumn(), console=console) as progress:
-            task = progress.add_task("Classifying...", total=len(unclassified))
-
-            for row in unclassified:
-                writeup_id = row["id"]
-                raw_path = row["raw_path"]
-                challenge_name = row["challenge_name"] or ""
-                cat = row["category"] or ""
-
-                # Read the raw content
-                if not raw_path or not Path(raw_path).exists():
-                    # Missing file is a fetch problem, not a classification
-                    # failure. Reset to re-fetch instead of marking as failed.
-                    conn.execute(
-                        "UPDATE writeups SET fetch_status='pending', "
-                        "raw_path=NULL WHERE id=?",
-                        (writeup_id,),
-                    )
-                    skipped += 1
-                    progress.update(task, advance=1)
-                    continue
-
-                content = Path(raw_path).read_text(encoding="utf-8", errors="replace")
-                if len(content.strip()) < 50:
-                    mark_class_failed(conn, writeup_id)
-                    failed += 1
-                    progress.update(task, advance=1)
-                    continue
-
-                try:
-                    result = classify_writeup(content, challenge_name, cat)
-                except TransientAPIError as e:
-                    # Rate limit: wait and retry the same writeup
-                    if e.retry_after:
-                        wait = min(e.retry_after, 120)  # cap at 2 minutes
-                        console.print(
-                            f"  [yellow]Rate limited:[/] waiting {wait:.0f}s..."
-                        )
-                        time.sleep(wait)
-                        try:
-                            result = classify_writeup(content, challenge_name, cat)
-                        except TransientAPIError:
-                            # Still failing after wait — count as transient
-                            consecutive_transient += 1
-                            skipped += 1
-                            if consecutive_transient >= max_consecutive_transient:
-                                console.print(
-                                    f"\n[red]Stopping:[/] {consecutive_transient} "
-                                    f"consecutive API failures. "
-                                    f"Remaining writeups left as pending."
-                                )
-                                break
-                            progress.update(task, advance=1)
-                            continue
-                    else:
-                        # Non-rate-limit transient error (connection, etc.)
-                        consecutive_transient += 1
-                        skipped += 1
-                        console.print(f"  [yellow]API unavailable:[/] {e}")
-
-                        if consecutive_transient >= max_consecutive_transient:
-                            console.print(
-                                f"\n[red]Stopping:[/] {consecutive_transient} "
-                                f"consecutive API failures. "
-                                f"Remaining writeups left as pending."
-                            )
-                            break
-
-                        progress.update(task, advance=1)
-                        continue
-
-                # Reset transient counter on any non-transient outcome
-                consecutive_transient = 0
-
-                if result:
-                    mark_classified(
-                        conn, writeup_id,
-                        techniques=result.techniques,
-                        tools_used=result.tools_used,
-                        solve_steps=result.solve_steps,
-                        recognition=result.recognition_signals,
-                        difficulty=result.difficulty,
-                        notes=result.summary,
-                    )
-
-                    # Record discovered sub-techniques in taxonomy_nodes
-                    known_subs = all_sub_slugs()
-                    for tm in result.techniques:
-                        if tm.sub_technique and tm.sub_technique not in known_subs:
-                            cat_for_tech = get_category(tm.technique)
-                            if cat_for_tech:
-                                record_sub_technique(
-                                    conn, tm.sub_technique,
-                                    tm.technique, cat_for_tech,
-                                )
-
-                    # Backfill challenge category from inferred techniques
-                    inferred = infer_category(
-                        result.technique_slugs, TECHNIQUE_TO_CATEGORY,
-                    )
-                    if inferred:
-                        backfill_challenge_category(conn, writeup_id, inferred)
-
-                    success += 1
-
-                    # Log the classification
-                    techs = ", ".join(
-                        f"{t.technique}/{t.sub_technique}"
-                        if t.sub_technique else t.technique
-                        for t in result.techniques[:3]
-                    )
-                    console.print(
-                        f"  [dim]{challenge_name}[/] -> [cyan]{techs}[/]"
-                    )
-                else:
-                    # Permanent failure (bad content, unparseable LLM output)
-                    mark_class_failed(conn, writeup_id)
-                    failed += 1
-
-                progress.update(
-                    task, advance=1,
-                    description=f"Classifying... ({success} ok, {failed} failed)"
-                )
-
-        parts = [f"Classified {success}"]
-        if failed:
-            parts.append(f"failed {failed}")
-        if skipped:
-            parts.append(f"skipped {skipped} (will retry)")
-        console.print(f"\n[green]Done![/] {', '.join(parts)}")
-
-
-if __name__ == "__main__":
-    run(limit=50)

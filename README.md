@@ -60,53 +60,6 @@ flowchart LR
 - **Automatic cleanup.** Running `classify` or `all` automatically deduplicates and removes junk before spending LLM tokens. No manual `dedup`/`clean` step needed.
 - **Layered architecture.** Configuration, taxonomy data, data access (db), and service logic (classify, build, fetch) are separated so a GUI or API can reuse the same services without importing CLI code.
 
-## Project Structure
-
-```
-CTF_Playbook/
-├── pyproject.toml
-├── README.md
-├── ctf_playbook/                     # Source code
-│   ├── __init__.py
-│   ├── __main__.py
-│   ├── config.py                     # Settings: paths, API keys, rate limits
-│   ├── taxonomy.py                   # Technique taxonomy (categories, techniques, sub-techniques)
-│   ├── models.py                     # Dataclasses (TechniqueMatch, ClassificationResult, etc.)
-│   ├── db.py                         # SQLite schema, CRUD, sub-technique tracking
-│   ├── cli.py                        # Click CLI orchestrator
-│   ├── scrapers/
-│   │   ├── __init__.py
-│   │   ├── ctftime.py                # CTFtime event/task/writeup scraper
-│   │   └── github.py                 # GitHub repo discovery + tree walking
-│   └── services/
-│       ├── __init__.py
-│       ├── fetcher.py                # URL fetcher with per-domain rate limiting
-│       ├── classifier.py             # LLM classification with hierarchical technique output
-│       └── builder.py                # Playbook + sub-technique file generation
-│   └── gui/                          # Local web app (FastAPI + Jinja2)
-│       ├── __init__.py
-│       ├── app.py                    # App factory, static/template mount
-│       ├── data.py                   # Playbook loader, DB search wrapper
-│       ├── routes/
-│       │   ├── pages.py              # HTML routes: dashboard, technique, category, search, tools
-│       │   └── api.py                # JSON API: /api/stats, /api/techniques, /api/search
-│       ├── templates/                # Jinja2 templates (dark theme)
-│       └── static/                   # CSS + JS (sortable tables, sidebar tree)
-├── tests/                            # pytest suite (187 tests)
-│   ├── test_config.py                # Taxonomy structure, sub-techniques, category inference
-│   ├── test_db.py                    # CRUD, sub-technique tracking, dedup, soft reset
-│   ├── test_builder.py               # Builder pipeline: serialization, rendering, cross-refs
-│   ├── test_models.py                # TechniqueMatch, ClassificationResult
-│   ├── test_fetcher.py               # URL generation, content quality checks
-│   └── test_github_parser.py         # Path parsing, category aliases, repo filtering
-└── playbook/                         # Output (generated at runtime, gitignored)
-    ├── playbook.json                 # Structured data (single source of truth for GUI/API)
-    ├── INDEX.md                      # Master index with all techniques
-    ├── techniques/                   # category/technique/_pattern.md + sub-technique .md files
-    ├── recon-patterns/               # Per-category recognition signal quick-reference
-    └── raw-writeups/                 # Downloaded writeup content
-```
-
 ## Setup
 
 ```bash
@@ -177,12 +130,6 @@ uv run pytest
 ## Interactive GUI
 
 The playbook includes a local web app for browsing techniques, searching writeups, and exploring tools. It reads directly from `playbook.json` — no external services required.
-
-```bash
-uv run ctf-playbook serve                  # Opens browser at http://127.0.0.1:8080
-uv run ctf-playbook serve --port 3000      # Custom port
-uv run ctf-playbook serve --no-browser     # Don't auto-open browser
-```
 
 ### Views
 

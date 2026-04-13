@@ -566,7 +566,16 @@ def clean_junk_writeups(conn: sqlite3.Connection,
             cleaned += 1
             continue
 
-        text = p.read_text(encoding="utf-8", errors="replace")
+        try:
+            text = p.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            # Corrupted or unreadable file — treat as missing
+            conn.execute(
+                "UPDATE writeups SET fetch_status='failed', raw_path=NULL WHERE id=?",
+                (row["id"],))
+            cleaned += 1
+            continue
+
         # Strip YAML frontmatter before checking
         if text.startswith("---\n"):
             end = text.find("---\n", 4)
