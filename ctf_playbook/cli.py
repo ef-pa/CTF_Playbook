@@ -105,9 +105,9 @@ def serve(port, host, no_browser):
     uvicorn.run(create_app(), host=host, port=port, log_level="warning")
 
 
-@cli.command()
+@cli.command(name="export")
 @click.option("--output", "-o", default=None, help="Output path for JSON file")
-def export(output):
+def export_cmd(output):
     """Export playbook data as JSON (without generating markdown)."""
     from pathlib import Path
     from ctf_playbook.services.builder import (
@@ -118,6 +118,37 @@ def export(output):
     if playbook:
         path = Path(output) if output else None
         export_playbook_json(playbook, path)
+
+
+@cli.command(name="import")
+@click.argument("input_path", type=click.Path(exists=True))
+def import_cmd(input_path):
+    """Import a playbook.json file for the GUI to serve."""
+    import json
+    import shutil
+    from pathlib import Path
+    from ctf_playbook.services.builder import PLAYBOOK_JSON_PATH
+
+    src = Path(input_path)
+    # Validate it's actual playbook JSON
+    try:
+        with open(src, encoding="utf-8") as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+        console.print(f"[red]Invalid JSON:[/] {e}")
+        return
+
+    if "techniques" not in data:
+        console.print("[red]Not a valid playbook file[/] (missing 'techniques' key)")
+        return
+
+    stats = data.get("stats", {})
+    console.print(f"Importing: {stats.get('total_techniques', '?')} techniques, "
+                  f"{stats.get('total_writeups', '?')} writeups")
+
+    PLAYBOOK_JSON_PATH.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(src, PLAYBOOK_JSON_PATH)
+    console.print(f"Imported to [green]{PLAYBOOK_JSON_PATH}[/]")
 
 
 @cli.command()

@@ -132,6 +132,7 @@ uv run ctf-playbook classify        # Extract techniques via LLM (auto-cleans fi
 uv run ctf-playbook build           # Generate playbook.json + markdown files
 uv run ctf-playbook export          # Export playbook.json only (no markdown)
 uv run ctf-playbook export -o out.json  # Export to a custom path
+uv run ctf-playbook import data.json    # Import a playbook.json for the GUI
 uv run ctf-playbook serve           # Launch the interactive web GUI
 
 # Stage options

@@ -443,13 +443,52 @@ h4 { font-size: 0.9rem; margin: 0.75rem 0 0.4rem; font-weight: 600; color: var(-
 }
 
 /* ── Recon Patterns ──────────────────────────────────────────── */
-.recon-category { margin-bottom: 1.5rem; }
-.recon-category h3 { margin-bottom: 0.25rem; }
-.recon-category .section-hint { margin-bottom: 0.5rem; }
-.recon-technique { margin-bottom: 1rem; padding-left: 0.5rem; border-left: 2px solid var(--border); }
-.recon-technique h4 { color: var(--text); margin-bottom: 0.3rem; }
-.recon-technique h4 a { color: var(--accent); }
-.pattern-list { list-style: disc; padding-left: 1.5rem; }
+details.recon-category { margin-bottom: 1rem; }
+details.recon-category > .section-hint { margin: 0.5rem 0 0.75rem; }
+
+.recon-summary {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    cursor: pointer;
+    list-style: none;
+}
+.recon-summary::-webkit-details-marker { display: none; }
+.recon-summary::before {
+    content: "\25b6";
+    font-size: 0.65rem;
+    color: var(--text-dim);
+    transition: transform 0.15s;
+    flex-shrink: 0;
+}
+details.recon-category[open] > .recon-summary::before { transform: rotate(90deg); }
+.recon-summary h2 { margin-bottom: 0; }
+
+details.recon-technique {
+    margin: 0.4rem 0;
+    padding-left: 0.5rem;
+    border-left: 2px solid var(--border);
+}
+details.recon-technique > summary {
+    cursor: pointer;
+    font-size: 0.9rem;
+    font-weight: 600;
+    padding: 0.3rem 0;
+    list-style: none;
+}
+details.recon-technique > summary::-webkit-details-marker { display: none; }
+details.recon-technique > summary::before {
+    content: "\25b6";
+    font-size: 0.5rem;
+    margin-right: 0.4rem;
+    color: var(--text-dim);
+    display: inline-block;
+    transition: transform 0.15s;
+}
+details.recon-technique[open] > summary::before { transform: rotate(90deg); }
+details.recon-technique > summary a { color: var(--accent); }
+
+.pattern-list { list-style: disc; padding-left: 1.5rem; margin: 0.25rem 0 0.5rem; }
 .pattern-list li { padding: 0.15rem 0; font-size: 0.85rem; color: var(--text-dim); }
 
 /* ── Utility ──────────────────────────────────────────────────── */

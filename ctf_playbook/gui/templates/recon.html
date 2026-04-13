@@ -4,24 +4,24 @@
 <p class="section-hint">Per-category recognition signals to help triage challenges during a CTF. Look for these patterns to quickly identify what technique applies.</p>
 
 {% for category, data in recon_patterns.items() %}
-<section class="card recon-category">
-    <h2><a href="/category/{{ category }}">{{ slug_to_title(category) }}</a></h2>
+<details class="card recon-category">
+    <summary class="recon-summary">
+        <h2><a href="/category/{{ category }}">{{ slug_to_title(category) }}</a></h2>
+        <span class="badge count">{{ data.techniques|length }} techniques</span>
+    </summary>
     <p class="section-hint">{{ data.description }}</p>
 
     {% for tech_slug, patterns in data.techniques.items() %}
-    <div class="recon-technique">
-        <h4><a href="/technique/{{ tech_slug }}">{{ slug_to_title(tech_slug) }}</a></h4>
+    <details class="recon-technique">
+        <summary><a href="/technique/{{ tech_slug }}">{{ slug_to_title(tech_slug) }}</a> <span class="dim">({{ patterns|length }})</span></summary>
         <ul class="pattern-list">
-            {% for pattern in patterns[:6] %}
+            {% for pattern in patterns %}
             <li>{{ pattern }}</li>
             {% endfor %}
         </ul>
-        {% if patterns|length > 6 %}
-        <span class="more-indicator">+ {{ patterns|length - 6 }} more signals</span>
-        {% endif %}
-    </div>
+    </details>
     {% endfor %}
-</section>
+</details>
 {% else %}
 <p>No recon patterns available. Run the pipeline to generate them.</p>
 {% endfor %}

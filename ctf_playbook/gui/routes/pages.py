@@ -144,7 +144,7 @@ async def search_page(request: Request, q: str = "", technique: str = "",
 async def recon_patterns(request: Request):
     """Recon patterns page — per-category recognition signals for triage."""
     pb = get_playbook()
-    recon = pb.get("recon_patterns", {})
+    recon = dict(sorted(pb.get("recon_patterns", {}).items()))
     tree = get_techniques_by_category()
 
     return TEMPLATES.TemplateResponse(request, "recon.html", {
