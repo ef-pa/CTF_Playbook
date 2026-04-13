@@ -439,7 +439,7 @@ def compare(limit, category):
                 console.file.buffer, encoding="utf-8", errors="replace",
             )
 
-        console.rule("[bold blue]Claude vs Gemini Comparison")
+        console.rule("[bold blue]Stored vs Fresh Comparison")
         console.print(f"Comparing {len(rows)} writeups\n")
 
         # Track agreement scores

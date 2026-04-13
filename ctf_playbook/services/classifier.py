@@ -8,18 +8,10 @@ import json
 import time
 from pathlib import Path
 
-import google.generativeai as genai
-from google.api_core.exceptions import (
-    ResourceExhausted, TooManyRequests, ServiceUnavailable,
-    InternalServerError, DeadlineExceeded, RetryError,
-)
+from google import genai
+from google.genai import types, errors
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn
-
-# Transient errors — the writeup itself is fine, the API is temporarily unavailable.
-# These should NOT mark the writeup as failed.
-_TRANSIENT_ERRORS = (ResourceExhausted, TooManyRequests, ServiceUnavailable,
-                     InternalServerError, DeadlineExceeded, RetryError)
 
 from ctf_playbook.config import GEMINI_API_KEY, GEMINI_MODEL, GEMINI_RPM
 from ctf_playbook.taxonomy import TAXONOMY, TECHNIQUE_TO_CATEGORY, get_category, all_sub_slugs
@@ -31,16 +23,16 @@ from ctf_playbook.db import (
 
 console = Console()
 
-_configured = False
+_client: genai.Client | None = None
 _last_request = 0.0  # timestamp of last API call
 
 
-def _ensure_configured():
-    """Lazily configure the Gemini client."""
-    global _configured
-    if not _configured and GEMINI_API_KEY:
-        genai.configure(api_key=GEMINI_API_KEY)
-        _configured = True
+def _get_client() -> genai.Client | None:
+    """Lazily create the Gemini client."""
+    global _client
+    if _client is None and GEMINI_API_KEY:
+        _client = genai.Client(api_key=GEMINI_API_KEY)
+    return _client
 
 
 def _rate_limit():
@@ -121,8 +113,8 @@ Respond with ONLY the JSON object. No markdown fences, no preamble.
 def classify_writeup(content: str, challenge_name: str = "",
                      category: str = "") -> ClassificationResult | None:
     """Send a writeup to the LLM for classification."""
-    _ensure_configured()
-    if not GEMINI_API_KEY:
+    client = _get_client()
+    if not client:
         console.print("[red]No GEMINI_API_KEY set — cannot classify[/]")
         return None
 
@@ -145,11 +137,11 @@ Analyze this writeup and extract the technique information as JSON. Remember: us
     try:
         _rate_limit()
         prompt = build_classification_prompt()
-        model = genai.GenerativeModel(
-            model_name=GEMINI_MODEL,
-            system_instruction=prompt,
+        response = client.models.generate_content(
+            model=GEMINI_MODEL,
+            config=types.GenerateContentConfig(system_instruction=prompt),
+            contents=user_message,
         )
-        response = model.generate_content(user_message)
         text = response.text.strip()
 
         # Clean up potential markdown fences
@@ -189,12 +181,13 @@ Analyze this writeup and extract the technique information as JSON. Remember: us
     except json.JSONDecodeError as e:
         console.print(f"  [yellow]JSON parse error:[/] {e}")
         return None  # permanent — the LLM returned unparseable output
-    except _TRANSIENT_ERRORS as e:
-        # Rate limit, quota, or server error — writeup is fine, API is not
-        retry_after = None
-        if isinstance(e, (ResourceExhausted, TooManyRequests)):
-            retry_after = 60.0  # wait a full minute on rate limit
+    except errors.ClientError as e:
+        # 4xx — includes 429 rate limit
+        retry_after = 60.0 if e.code == 429 else None
         raise TransientAPIError(str(e), retry_after=retry_after) from e
+    except errors.ServerError as e:
+        # 5xx — server-side transient error
+        raise TransientAPIError(str(e)) from e
     except Exception as e:
         console.print(f"  [red]Unexpected error:[/] {e}")
         return None  # permanent — unknown issue with this specific writeup
