@@ -414,6 +414,14 @@ class TestSubTechniqueTables:
         assert "taxonomy_nodes" in tables
         assert "writeup_techniques" in tables
 
+    def test_writeup_techniques_has_signal_columns(self, db):
+        """Migration adds per-level signal columns to writeup_techniques."""
+        cols = {row[1] for row in db.execute("PRAGMA table_info(writeup_techniques)").fetchall()}
+        assert "recognition_signals" in cols
+        assert "sub_recognition_signals" in cols
+        assert "solve_steps" in cols
+        assert "sub_solve_steps" in cols
+
     def test_mark_classified_with_technique_match(self, db):
         """TechniqueMatch objects populate the writeup_techniques join table."""
         _, _, wid = _seed(db)
@@ -438,6 +446,52 @@ class TestSubTechniqueTables:
 
         bo_row = [r for r in rows if r["technique"] == "buffer-overflow"][0]
         assert bo_row["sub_technique"] is None
+
+    def test_mark_classified_stores_per_level_signals(self, db):
+        """TechniqueMatch with per-level signals stores them in the join table."""
+        _, _, wid = _seed(db)
+        mark_fetched(db, wid, "/tmp/raw.md")
+        techniques = [
+            TechniqueMatch(
+                "rsa-attacks", "wiener",
+                recognition_signals=["RSA with unusual params"],
+                solve_steps=["extract key", "apply attack"],
+                sub_recognition_signals=["very large e"],
+                sub_solve_steps=["continued fraction"],
+            ),
+        ]
+        mark_classified(db, wid,
+                        techniques=techniques,
+                        tools_used=[], solve_steps=[], recognition=[],
+                        difficulty="medium")
+
+        row = db.execute(
+            "SELECT * FROM writeup_techniques WHERE writeup_id=?", (wid,)
+        ).fetchone()
+        assert json.loads(row["recognition_signals"]) == ["RSA with unusual params"]
+        assert json.loads(row["solve_steps"]) == ["extract key", "apply attack"]
+        assert json.loads(row["sub_recognition_signals"]) == ["very large e"]
+        assert json.loads(row["sub_solve_steps"]) == ["continued fraction"]
+
+    def test_mark_classified_null_signals_for_empty(self, db):
+        """TechniqueMatch with no per-level signals stores NULL."""
+        _, _, wid = _seed(db)
+        mark_fetched(db, wid, "/tmp/raw.md")
+        techniques = [TechniqueMatch("buffer-overflow")]
+        mark_classified(db, wid,
+                        techniques=techniques,
+                        tools_used=[], solve_steps=[], recognition=[],
+                        difficulty="easy")
+
+        row = db.execute(
+            "SELECT recognition_signals, sub_recognition_signals, "
+            "solve_steps, sub_solve_steps "
+            "FROM writeup_techniques WHERE writeup_id=?", (wid,)
+        ).fetchone()
+        assert row["recognition_signals"] is None
+        assert row["sub_recognition_signals"] is None
+        assert row["solve_steps"] is None
+        assert row["sub_solve_steps"] is None
 
     def test_mark_classified_with_plain_strings(self, db):
         """Plain string lists still work (backward compat)."""

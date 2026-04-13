@@ -123,6 +123,14 @@ def init_db(db_path: Path = DB_PATH):
             pass  # column already exists
         conn.execute("CREATE INDEX IF NOT EXISTS idx_writeups_hash ON writeups(content_hash)")
 
+        # Migration: add per-level signal columns to writeup_techniques
+        for col in ("recognition_signals", "sub_recognition_signals",
+                     "solve_steps", "sub_solve_steps"):
+            try:
+                conn.execute(f"ALTER TABLE writeup_techniques ADD COLUMN {col} TEXT")
+            except sqlite3.OperationalError:
+                pass  # column already exists
+
 
 # ── Insert helpers ─────────────────────────────────────────────────────────
 
@@ -267,9 +275,18 @@ def mark_classified(conn: sqlite3.Connection, writeup_id: int, techniques: list,
     for t in techniques:
         if hasattr(t, "technique"):  # TechniqueMatch
             conn.execute("""
-                INSERT OR IGNORE INTO writeup_techniques (writeup_id, technique, sub_technique)
-                VALUES (?, ?, ?)
-            """, (writeup_id, t.technique, t.sub_technique))
+                INSERT OR IGNORE INTO writeup_techniques
+                (writeup_id, technique, sub_technique,
+                 recognition_signals, sub_recognition_signals,
+                 solve_steps, sub_solve_steps)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (
+                writeup_id, t.technique, t.sub_technique,
+                json.dumps(t.recognition_signals) if t.recognition_signals else None,
+                json.dumps(t.sub_recognition_signals) if t.sub_recognition_signals else None,
+                json.dumps(t.solve_steps) if t.solve_steps else None,
+                json.dumps(t.sub_solve_steps) if t.sub_solve_steps else None,
+            ))
         else:
             conn.execute("""
                 INSERT OR IGNORE INTO writeup_techniques (writeup_id, technique, sub_technique)

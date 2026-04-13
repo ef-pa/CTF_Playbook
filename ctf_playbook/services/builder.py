@@ -146,23 +146,37 @@ def build_pattern_files():
             WHERE w.class_status = 'classified'
         """).fetchall()
 
-        # Query sub-technique mappings from the join table
-        sub_rows = conn.execute("""
-            SELECT writeup_id, technique, sub_technique
+        # Query all per-technique data from the join table (including per-level signals)
+        wt_rows = conn.execute("""
+            SELECT writeup_id, technique, sub_technique,
+                   recognition_signals, sub_recognition_signals,
+                   solve_steps, sub_solve_steps
             FROM writeup_techniques
-            WHERE sub_technique IS NOT NULL
         """).fetchall()
 
     if not rows:
         console.print("[yellow]No classified writeups found. Run the classifier first.[/]")
         return
 
-    # Build writeup_id -> list of (technique, sub_technique) from join table
+    # Build lookup: writeup_id -> {technique -> row data}
+    # and writeup_id -> [(technique, sub_technique)] for sub-technique aggregation
+    wt_lookup: dict[int, dict[str, dict]] = defaultdict(dict)
     writeup_subs: dict[int, list[tuple[str, str]]] = defaultdict(list)
-    for sr in sub_rows:
-        writeup_subs[sr["writeup_id"]].append((sr["technique"], sr["sub_technique"]))
+    for wr in wt_rows:
+        wt_lookup[wr["writeup_id"]][wr["technique"]] = {
+            "recognition_signals": json.loads(wr["recognition_signals"])
+                if wr["recognition_signals"] else None,
+            "sub_recognition_signals": json.loads(wr["sub_recognition_signals"])
+                if wr["sub_recognition_signals"] else None,
+            "solve_steps": json.loads(wr["solve_steps"])
+                if wr["solve_steps"] else None,
+            "sub_solve_steps": json.loads(wr["sub_solve_steps"])
+                if wr["sub_solve_steps"] else None,
+        }
+        if wr["sub_technique"]:
+            writeup_subs[wr["writeup_id"]].append((wr["technique"], wr["sub_technique"]))
 
-    # Group by technique (top-level aggregation, same as before)
+    # Group by technique (top-level aggregation)
     technique_data = defaultdict(_empty_data_bucket)
     # Group by (technique, sub_technique) for sub-technique files
     sub_technique_data: dict[str, dict[str, dict]] = defaultdict(
@@ -172,8 +186,8 @@ def build_pattern_files():
     for row in rows:
         techniques = json.loads(row["techniques"]) if row["techniques"] else []
         tools = json.loads(row["tools_used"]) if row["tools_used"] else []
-        steps = json.loads(row["solve_steps"]) if row["solve_steps"] else []
-        recognition = json.loads(row["recognition"]) if row["recognition"] else []
+        flat_steps = json.loads(row["solve_steps"]) if row["solve_steps"] else []
+        flat_recognition = json.loads(row["recognition"]) if row["recognition"] else []
 
         example = {
             "challenge": row["challenge_name"],
@@ -184,24 +198,38 @@ def build_pattern_files():
             "difficulty": row["difficulty"] or "medium",
         }
 
+        wt_for_writeup = wt_lookup.get(row["id"], {})
+
         for tech in techniques:
             td = technique_data[tech]
-            for sig in recognition:
+
+            # Use per-technique signals if available, otherwise flat columns
+            wt_data = wt_for_writeup.get(tech, {})
+            tech_signals = wt_data.get("recognition_signals") or flat_recognition
+            tech_steps = wt_data.get("solve_steps") or flat_steps
+
+            for sig in tech_signals:
                 td["recognition"][sig] += 1
             for tool in tools:
                 td["tools"][tool] += 1
-            td["steps"].append(steps)
+            td["steps"].append(tech_steps)
             td["difficulties"][row["difficulty"] or "medium"] += 1
             td["examples"].append(example)
 
         # Aggregate sub-technique data from the join table
         for parent_tech, sub_tech in writeup_subs.get(row["id"], []):
             std = sub_technique_data[parent_tech][sub_tech]
-            for sig in recognition:
+
+            # Use sub-technique-specific signals if available, otherwise flat columns
+            wt_data = wt_for_writeup.get(parent_tech, {})
+            sub_signals = wt_data.get("sub_recognition_signals") or flat_recognition
+            sub_steps = wt_data.get("sub_solve_steps") or flat_steps
+
+            for sig in sub_signals:
                 std["recognition"][sig] += 1
             for tool in tools:
                 std["tools"][tool] += 1
-            std["steps"].append(steps)
+            std["steps"].append(sub_steps)
             std["difficulties"][row["difficulty"] or "medium"] += 1
             std["examples"].append(example)
 

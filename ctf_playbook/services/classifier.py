@@ -67,14 +67,17 @@ def build_classification_prompt() -> str:
 ## Your Task
 Analyze the writeup and return a JSON object with these fields:
 
-- **techniques**: List of technique objects. Each object has:
-  - "technique": The technique slug from the taxonomy above (e.g., "rsa-attacks", "buffer-overflow")
-  - "sub_technique": (optional) A more specific sub-technique slug if applicable. Use an existing sub-technique from the taxonomy when it fits, or create a new descriptive slug (lowercase, hyphenated).
-  Example: [{{"technique": "rsa-attacks", "sub_technique": "wiener"}}, {{"technique": "buffer-overflow"}}]
-  Usually 1-3 technique objects. If the technique doesn't fit any listed, create a new descriptive slug for the "technique" field.
+- **techniques**: List of technique objects (usually 1-3). Each object has:
+  - "technique": The technique slug from the taxonomy above (e.g., "rsa-attacks", "buffer-overflow"). If nothing fits, create a new descriptive slug (lowercase, hyphenated).
+  - "sub_technique": (optional) A more specific sub-technique slug if applicable. Use an existing sub-technique from the taxonomy when it fits, or create a new descriptive slug.
+  - "recognition_signals": 1-3 short phrases for how to recognize THIS technique family from a challenge description (e.g., "RSA with unusual parameters", "binary with gets() and no canary"). These should be general to the technique, not specific to the sub-technique.
+  - "solve_steps": 3-7 key solving steps at the technique level, in order.
+  - "sub_recognition_signals": (only when sub_technique is set) 1-2 phrases for what distinguishes THIS SPECIFIC variant from the parent technique. Focus on the differentiating signal, not general technique signals. (e.g., for wiener specifically: "public exponent e is extremely large relative to N")
+  - "sub_solve_steps": (only when sub_technique is set) Solving steps specific to this variant that differ from the general technique flow.
+
+  Example: [{{"technique": "rsa-attacks", "sub_technique": "wiener", "recognition_signals": ["RSA with unusual parameters", "public key available for analysis"], "solve_steps": ["extract public key components", "identify vulnerability in parameters", "apply attack to recover private key"], "sub_recognition_signals": ["public exponent e is extremely large relative to N"], "sub_solve_steps": ["compute continued fraction expansion of e/N", "test convergents for valid private key"]}}]
+
 - **tools_used**: List of specific tools, libraries, or scripts mentioned (e.g., "gdb", "pwntools", "z3", "burpsuite", "ghidra", "wireshark", "john", "hashcat", "sqlmap").
-- **recognition_signals**: List of 1-3 short phrases describing how you'd recognize this type of challenge from its description or initial examination (e.g., "binary with no PIE and gets() call", "RSA with small public exponent").
-- **solve_steps**: List of 3-7 short descriptions of the key solving steps in order (e.g., "identify buffer overflow in input handler", "calculate offset to return address", "build ROP chain to call system('/bin/sh')").
 - **difficulty**: One of "easy", "medium", "hard", "insane" — based on the complexity of the technique and steps involved.
 - **summary**: A 1-2 sentence summary of what the challenge was and how it was solved.
 
@@ -130,7 +133,9 @@ Analyze this writeup and extract the technique information as JSON."""
         raw_techniques = data.get("techniques", [])
         technique_matches = [TechniqueMatch.from_dict(t) for t in raw_techniques]
 
-        return ClassificationResult(
+        # Build flat recognition/steps from per-technique data, with
+        # top-level fields as fallback for backward compat
+        result = ClassificationResult(
             techniques=technique_matches,
             tools_used=data.get("tools_used", []),
             solve_steps=data.get("solve_steps", []),
@@ -138,6 +143,15 @@ Analyze this writeup and extract the technique information as JSON."""
             difficulty=data.get("difficulty", "medium"),
             summary=data.get("summary", ""),
         )
+
+        # If the LLM put signals in per-technique objects but omitted
+        # top-level fields, populate them from the aggregation helpers
+        if not result.recognition_signals:
+            result.recognition_signals = result.flat_recognition
+        if not result.solve_steps:
+            result.solve_steps = result.flat_solve_steps
+
+        return result
 
     except json.JSONDecodeError as e:
         console.print(f"  [yellow]JSON parse error:[/] {e}")
