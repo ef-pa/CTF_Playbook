@@ -47,6 +47,40 @@ def build_folder_structure():
     (PLAYBOOK_DIR / "raw-writeups").mkdir(parents=True, exist_ok=True)
 
 
+def _merge_solve_steps(step_lists: list[list[str]], max_steps: int = 7) -> list[str]:
+    """Merge multiple solve step lists into a generalized flow.
+
+    Uses frequency and positional analysis: steps that appear across multiple
+    writeups are preferred, ordered by their average position. Falls back to
+    the longest individual step list when there isn't enough consensus.
+    """
+    if not step_lists:
+        return []
+    if len(step_lists) == 1:
+        return step_lists[0][:max_steps]
+
+    # Track each normalized step's frequency and average position
+    step_info: dict[str, dict] = {}  # normalized -> {original, count, total_pos}
+    for steps in step_lists:
+        for pos, step in enumerate(steps):
+            key = step.strip().lower()
+            if key not in step_info:
+                step_info[key] = {"original": step, "count": 0, "total_pos": 0}
+            step_info[key]["count"] += 1
+            step_info[key]["total_pos"] += pos
+
+    # Steps appearing in 2+ writeups = consensus
+    consensus = [s for s in step_info.values() if s["count"] >= 2]
+    if len(consensus) >= 3:
+        # Sort by average position for natural ordering
+        consensus.sort(key=lambda s: s["total_pos"] / s["count"])
+        return [s["original"] for s in consensus[:max_steps]]
+
+    # Not enough consensus — use the longest individual step list
+    longest = max(step_lists, key=len)
+    return longest[:max_steps]
+
+
 def _render_pattern_content(slug: str, data: dict) -> str:
     """Render the markdown content for a technique or sub-technique pattern file."""
     # Sort recognition signals by frequency
@@ -57,9 +91,8 @@ def _render_pattern_content(slug: str, data: dict) -> str:
     top_diff = max(data["difficulties"].items(), key=lambda x: x[1])[0] \
         if data["difficulties"] else "medium"
 
-    # Build a generalized solve flow from the most common step patterns
-    # (simplified: just show a representative example)
-    representative_steps = data["steps"][0] if data["steps"] else []
+    # Build a generalized solve flow from multiple writeups
+    merged_steps = _merge_solve_steps(data["steps"])
 
     lines = [
         f"# {_slug_to_title(slug)}",
@@ -88,7 +121,7 @@ def _render_pattern_content(slug: str, data: dict) -> str:
         "## Generalized Solve Flow",
         "",
     ]
-    for i, step in enumerate(representative_steps, 1):
+    for i, step in enumerate(merged_steps, 1):
         lines.append(f"{i}. {step}")
 
     lines += [
