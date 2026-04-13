@@ -395,6 +395,157 @@ def promote(threshold):
                 console.print(f"    [dim]Skipped[/]")
 
 
+@cli.command()
+@click.option("--limit", "-n", default=5, help="Number of writeups to compare")
+@click.option("--category", "-c", default=None, help="Filter by category")
+def compare(limit, category):
+    """Compare Gemini classification against existing Claude results."""
+    from pathlib import Path
+    from ctf_playbook.config import GEMINI_API_KEY
+    from ctf_playbook.services.gemini_classifier import classify_writeup_gemini
+
+    if not GEMINI_API_KEY:
+        console.print("[red]Set GEMINI_API_KEY in your .env to use comparison[/]")
+        return
+
+    with db_session() as conn:
+        # Get already-classified writeups with real techniques
+        query = """
+            SELECT w.id, w.raw_path, w.techniques, w.tools_used, w.difficulty,
+                   w.notes, c.name as challenge_name, c.category
+            FROM writeups w
+            JOIN challenges c ON w.challenge_id = c.id
+            WHERE w.class_status = 'classified'
+              AND w.raw_path IS NOT NULL
+              AND w.techniques != '[]'
+        """
+        params = []
+        if category:
+            query += " AND c.category = ?"
+            params.append(category)
+        query += " ORDER BY RANDOM() LIMIT ?"
+        params.append(limit)
+
+        rows = conn.execute(query, params).fetchall()
+
+        if not rows:
+            console.print("[yellow]No classified writeups found to compare[/]")
+            return
+
+        # Avoid Windows cp1252 encoding crashes on special characters
+        import io, os
+        if os.name == "nt":
+            console.file = io.TextIOWrapper(
+                console.file.buffer, encoding="utf-8", errors="replace",
+            )
+
+        console.rule("[bold blue]Claude vs Gemini Comparison")
+        console.print(f"Comparing {len(rows)} writeups\n")
+
+        # Track agreement scores
+        tech_matches = 0
+        diff_matches = 0
+        tool_overlaps = []
+        total = 0
+
+        for row in rows:
+            raw_path = row["raw_path"]
+            if not raw_path or not Path(raw_path).exists():
+                console.print(f"  [dim]Skipping {row['challenge_name']} (missing file)[/]")
+                continue
+
+            content = Path(raw_path).read_text(encoding="utf-8", errors="replace")
+            if len(content.strip()) < 50:
+                continue
+
+            # Claude's existing results
+            claude_techs = json.loads(row["techniques"])
+            claude_tools = set(json.loads(row["tools_used"]))
+            claude_diff = row["difficulty"]
+
+            # Gemini's fresh classification
+            console.print(f"[bold cyan]{row['challenge_name']}[/] ({row['category'] or '?'})")
+            result = classify_writeup_gemini(
+                content, row["challenge_name"], row["category"] or "",
+            )
+
+            if not result:
+                console.print("  [red]Gemini failed to classify[/]\n")
+                continue
+
+            gemini_techs = result.technique_slugs
+            gemini_tools = set(result.tools_used)
+            gemini_diff = result.difficulty
+
+            total += 1
+
+            # Compare techniques
+            claude_set = set(claude_techs)
+            gemini_set = set(gemini_techs)
+            tech_overlap = claude_set & gemini_set
+            if tech_overlap:
+                tech_matches += 1
+
+            # Compare difficulty
+            diff_match = claude_diff == gemini_diff
+            if diff_match:
+                diff_matches += 1
+
+            # Compare tools
+            if claude_tools or gemini_tools:
+                overlap = len(claude_tools & gemini_tools)
+                union = len(claude_tools | gemini_tools)
+                tool_overlaps.append(overlap / union if union else 0)
+
+            # Display comparison
+            tech_indicator = "[green]MATCH[/]" if tech_overlap else "[red]DIFF[/]"
+            diff_indicator = "[green]MATCH[/]" if diff_match else "[red]DIFF[/]"
+
+            table = Table(show_header=True, box=None, padding=(0, 2))
+            table.add_column("", style="dim", width=12)
+            table.add_column("Claude", style="cyan")
+            table.add_column("Gemini", style="yellow")
+            table.add_column("", width=7)
+
+            table.add_row(
+                "Techniques",
+                ", ".join(claude_techs),
+                ", ".join(gemini_techs),
+                tech_indicator,
+            )
+            table.add_row(
+                "Difficulty",
+                claude_diff or "?",
+                gemini_diff or "?",
+                diff_indicator,
+            )
+            table.add_row(
+                "Tools",
+                ", ".join(sorted(claude_tools)[:6]),
+                ", ".join(sorted(gemini_tools)[:6]),
+                "",
+            )
+            table.add_row(
+                "Summary",
+                (row["notes"] or "")[:80],
+                (result.summary or "")[:80],
+                "",
+            )
+            console.print(table)
+            console.print()
+
+        # Summary stats
+        if total:
+            console.rule("[bold]Agreement Summary")
+            console.print(f"  Technique overlap: [cyan]{tech_matches}/{total}[/] ({tech_matches/total:.0%})")
+            console.print(f"  Difficulty match:  [cyan]{diff_matches}/{total}[/] ({diff_matches/total:.0%})")
+            if tool_overlaps:
+                avg_tool = sum(tool_overlaps) / len(tool_overlaps)
+                console.print(f"  Avg tool overlap:  [cyan]{avg_tool:.0%}[/] (Jaccard similarity)")
+        else:
+            console.print("[yellow]No writeups were successfully compared[/]")
+
+
 @cli.command(name="all")
 @click.option("--max-events", default=200, help="Max events for CTFtime")
 @click.option("--max-repos", default=50, help="Max repos for GitHub")
