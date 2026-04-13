@@ -87,6 +87,25 @@ def build():
 
 
 @cli.command()
+@click.option("--port", default=8080, help="Port to serve on")
+@click.option("--host", default="127.0.0.1", help="Host to bind to")
+@click.option("--no-browser", is_flag=True, help="Don't auto-open browser")
+def serve(port, host, no_browser):
+    """Launch the interactive playbook browser."""
+    import uvicorn
+    from ctf_playbook.gui.app import create_app
+
+    url = f"http://{host}:{port}"
+    console.print(f"Starting playbook browser at [cyan]{url}[/]")
+
+    if not no_browser:
+        import webbrowser
+        webbrowser.open(url)
+
+    uvicorn.run(create_app(), host=host, port=port, log_level="warning")
+
+
+@cli.command()
 @click.option("--output", "-o", default=None, help="Output path for JSON file")
 def export(output):
     """Export playbook data as JSON (without generating markdown)."""

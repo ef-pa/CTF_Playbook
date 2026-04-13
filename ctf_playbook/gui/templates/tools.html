@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Tool Reference</h1>
+<p class="section-hint">Top tools across all classified writeups, with the techniques they appear in.</p>
+
+{% if tool_reference %}
+<table class="data-table tools-table sortable">
+    <thead>
+        <tr>
+            <th data-sort="text">Tool</th>
+            <th data-sort="number">Uses</th>
+            <th>Techniques</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for t in tool_reference %}
+        <tr>
+            <td class="tool-name">{{ t.tool }}</td>
+            <td>{{ t.count }}</td>
+            <td class="technique-pills">
+                {% for tech in t.techniques[:8] %}
+                <a href="/technique/{{ tech }}" class="tech-pill">{{ tech }}</a>
+                {% endfor %}
+                {% if t.techniques|length > 8 %}
+                <span class="dim">+{{ t.techniques|length - 8 }} more</span>
+                {% endif %}
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% else %}
+<p>No tool data available. Run the pipeline to classify writeups first.</p>
+{% endif %}
+{% endblock %}

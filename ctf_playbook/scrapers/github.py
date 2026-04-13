@@ -148,12 +148,19 @@ def index_repo_writeups(repo: dict, conn) -> int:
         filename = parts[-1].lower()
         is_readme = filename in ("readme.md", "readme.markdown")
 
-        # Skip top-level README (repo description) and depth-2 READMEs
-        # (event index/table-of-contents, not actual writeups).
-        # READMEs at depth 3+ are usually challenge writeups
-        # (e.g. event/challenge/README.md).
-        if is_readme and len(parts) <= 2:
-            continue
+        # Skip READMEs that aren't actual challenge writeups:
+        # - Top-level and depth-2: repo description or event index
+        # - Category-level: event/category/README.md (index of challenges)
+        if is_readme:
+            if len(parts) <= 2:
+                continue
+            # Strip year prefix for the category check
+            check = parts[:-1]
+            if check and re.match(r"^20\d{2}$", check[0]):
+                check = check[1:]
+            # If the README's parent folder is a known category, it's an index
+            if len(check) >= 2 and check[-1].lower() in CATEGORY_ALIASES:
+                continue
 
         # Try to infer event and challenge names from path
         event_name = repo["full_name"]  # fallback

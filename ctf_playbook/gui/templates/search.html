@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Search Writeups</h1>
+
+<form class="search-form" method="get" action="/search">
+    <div class="search-row">
+        <input type="text" name="q" value="{{ q }}" placeholder="Search by keyword..." class="search-input" autofocus>
+        <button type="submit" class="btn">Search</button>
+    </div>
+    <div class="filter-row">
+        <select name="technique" class="filter-select">
+            <option value="">All techniques</option>
+            {% for t in all_techniques %}
+            <option value="{{ t }}"{% if technique_filter == t %} selected{% endif %}>{{ slug_to_title(t) }}</option>
+            {% endfor %}
+        </select>
+        <input type="text" name="tool" value="{{ tool_filter }}" placeholder="Tool name..." class="filter-input">
+        <select name="difficulty" class="filter-select">
+            <option value="">Any difficulty</option>
+            {% for d in ["easy", "medium", "hard", "insane"] %}
+            <option value="{{ d }}"{% if difficulty_filter == d %} selected{% endif %}>{{ d|capitalize }}</option>
+            {% endfor %}
+        </select>
+    </div>
+</form>
+
+{% if searched %}
+<div class="results-header">
+    <p>Found <strong>{{ results|length }}</strong> result{{ "s" if results|length != 1 }}</p>
+</div>
+
+{% if results %}
+<div class="results-list">
+    {% for r in results %}
+    <div class="result-card">
+        <div class="result-header">
+            <h3><a href="{{ r.url }}" target="_blank" rel="noopener">{{ r.challenge_name }}</a></h3>
+            <div class="header-badges">
+                {% if r.category %}<span class="badge category">{{ r.category }}</span>{% endif %}
+                {% if r.difficulty %}<span class="badge {{ r.difficulty }}">{{ r.difficulty }}</span>{% endif %}
+            </div>
+        </div>
+        <p class="result-meta">{{ r.event_name }} {{ r.year }}</p>
+
+        {% if r.techniques is iterable and r.techniques is not string %}
+        <div class="result-techniques">
+            {% for t in r.techniques %}
+            <a href="/technique/{{ t }}" class="tech-pill">{{ t }}</a>
+            {% endfor %}
+        </div>
+        {% endif %}
+
+        {% if r.tools_used is iterable and r.tools_used is not string %}
+        <div class="tool-tags compact">
+            {% for t in r.tools_used %}
+            <span class="tool-tag small">{{ t }}</span>
+            {% endfor %}
+        </div>
+        {% endif %}
+
+        {% if r.notes %}
+        <p class="result-summary">{{ r.notes[:200] }}{% if r.notes|length > 200 %}...{% endif %}</p>
+        {% endif %}
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
+{% endif %}
+{% endblock %}

@@ -1,0 +1,147 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="technique-header">
+    <h1>{{ slug_to_title(slug) }}</h1>
+    <div class="header-badges">
+        <a href="/category/{{ tech.category }}" class="badge category">{{ slug_to_title(tech.category) }}</a>
+        <span class="badge {{ tech.difficulty }}">{{ tech.difficulty }}</span>
+        <span class="badge count">{{ tech.example_count }} writeup{{ "s" if tech.example_count != 1 }}</span>
+    </div>
+</div>
+
+{% if tech.recognition_signals %}
+<section class="card">
+    <h2>Recognition Signals</h2>
+    <p class="section-hint">How to identify this technique in a challenge.</p>
+    <ul class="signal-list">
+        {% for sig in tech.recognition_signals %}
+        <li>
+            <span class="signal-text">{{ sig.signal }}</span>
+            <span class="badge count">{{ sig.count }}</span>
+        </li>
+        {% endfor %}
+    </ul>
+</section>
+{% endif %}
+
+{% if tech.tools %}
+<section class="card">
+    <h2>Common Tools</h2>
+    <div class="tool-tags">
+        {% for t in tech.tools %}
+        <span class="tool-tag">{{ t.tool }} <span class="badge count">{{ t.count }}</span></span>
+        {% endfor %}
+    </div>
+</section>
+{% endif %}
+
+{% if tech.solve_steps %}
+<section class="card">
+    <h2>Solve Flow</h2>
+    <ol class="solve-steps">
+        {% for step in tech.solve_steps %}
+        <li>{{ step }}</li>
+        {% endfor %}
+    </ol>
+</section>
+{% endif %}
+
+{% if tech.cross_references %}
+<section class="card">
+    <h2>See Also</h2>
+    <p class="section-hint">Techniques that frequently co-occur with this one.</p>
+    <div class="xref-list">
+        {% for xref in tech.cross_references %}
+        <a href="/technique/{{ xref.technique }}" class="xref-link">
+            {{ slug_to_title(xref.technique) }}
+            <span class="badge count">{{ xref.count }}</span>
+        </a>
+        {% endfor %}
+    </div>
+</section>
+{% endif %}
+
+{% if tech.sub_techniques %}
+<section class="card">
+    <h2>Sub-Techniques</h2>
+    <div class="sub-tech-grid">
+        {% for sub_slug, sub in tech.sub_techniques.items() %}
+        <div class="sub-tech-card" id="{{ sub_slug }}">
+            <h3>{{ slug_to_title(sub_slug) }}</h3>
+            <div class="header-badges">
+                <span class="badge {{ sub.difficulty }}">{{ sub.difficulty }}</span>
+                <span class="badge count">{{ sub.example_count }} writeup{{ "s" if sub.example_count != 1 }}</span>
+            </div>
+
+            {% if sub.recognition_signals %}
+            <h4>Recognition Signals</h4>
+            <ul class="signal-list compact">
+                {% for sig in sub.recognition_signals[:5] %}
+                <li>{{ sig.signal }} <span class="badge count">{{ sig.count }}</span></li>
+                {% endfor %}
+            </ul>
+            {% endif %}
+
+            {% if sub.tools %}
+            <h4>Tools</h4>
+            <div class="tool-tags compact">
+                {% for t in sub.tools[:5] %}
+                <span class="tool-tag">{{ t.tool }}</span>
+                {% endfor %}
+            </div>
+            {% endif %}
+
+            {% if sub.solve_steps %}
+            <h4>Solve Flow</h4>
+            <ol class="solve-steps compact">
+                {% for step in sub.solve_steps %}
+                <li>{{ step }}</li>
+                {% endfor %}
+            </ol>
+            {% endif %}
+
+            {% if sub.examples %}
+            <h4>Examples</h4>
+            <ul class="example-list compact">
+                {% for ex in sub.examples[:5] %}
+                <li>
+                    <a href="{{ ex.url }}" target="_blank" rel="noopener">{{ ex.challenge }}</a>
+                    <span class="dim">{{ ex.event }} {{ ex.year }}</span>
+                </li>
+                {% endfor %}
+            </ul>
+            {% endif %}
+        </div>
+        {% endfor %}
+    </div>
+</section>
+{% endif %}
+
+{% if tech.examples %}
+<section class="card">
+    <h2>Example Writeups</h2>
+    <table class="data-table">
+        <thead>
+            <tr>
+                <th>Challenge</th>
+                <th>Event</th>
+                <th>Year</th>
+                <th>Difficulty</th>
+                <th>Summary</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for ex in tech.examples[:10] %}
+            <tr>
+                <td><a href="{{ ex.url }}" target="_blank" rel="noopener">{{ ex.challenge }}</a></td>
+                <td>{{ ex.event }}</td>
+                <td>{{ ex.year }}</td>
+                <td><span class="badge {{ ex.difficulty }}">{{ ex.difficulty }}</span></td>
+                <td class="summary-cell">{{ ex.summary[:120] }}{% if ex.summary|length > 120 %}...{% endif %}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</section>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>{{ slug_to_title(category) }}</h1>
+<p class="section-hint">{{ techniques|length }} technique{{ "s" if techniques|length != 1 }} in this category.</p>
+
+<table class="data-table sortable">
+    <thead>
+        <tr>
+            <th data-sort="text">Technique</th>
+            <th data-sort="number">Writeups</th>
+            <th data-sort="difficulty">Difficulty</th>
+            <th>Sub-Techniques</th>
+            <th>Top Signals</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for t in techniques %}
+        <tr>
+            <td><a href="/technique/{{ t.slug }}">{{ slug_to_title(t.slug) }}</a></td>
+            <td>{{ t.example_count }}</td>
+            <td><span class="badge {{ t.difficulty }}">{{ t.difficulty }}</span></td>
+            <td>
+                {% if t.sub_techniques %}
+                {% for sub_slug in t.sub_techniques.keys() %}
+                <a href="/technique/{{ t.slug }}#{{ sub_slug }}" class="tech-pill small">{{ slug_to_title(sub_slug) }}</a>
+                {% endfor %}
+                {% else %}
+                <span class="dim">&mdash;</span>
+                {% endif %}
+            </td>
+            <td class="signals-cell">
+                {% if t.recognition_signals %}
+                {{ t.recognition_signals[0].signal[:60] }}{% if t.recognition_signals[0].signal|length > 60 %}...{% endif %}
+                {% endif %}
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% endblock %}

@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>CTF Playbook</h1>
+
+<div class="stats-grid">
+    <div class="stat-card">
+        <div class="stat-value">{{ stats.get("total_techniques", 0) }}</div>
+        <div class="stat-label">Techniques</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value">{{ stats.get("total_sub_techniques", 0) }}</div>
+        <div class="stat-label">Sub-Techniques</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value">{{ stats.get("total_writeups", 0) }}</div>
+        <div class="stat-label">Writeups</div>
+    </div>
+</div>
+
+<div class="dashboard-grid">
+    <section class="card">
+        <h2>Categories</h2>
+        <table class="data-table">
+            <thead>
+                <tr><th>Category</th><th>Techniques</th></tr>
+            </thead>
+            <tbody>
+                {% for cat, count in cat_counts %}
+                <tr>
+                    <td><a href="/category/{{ cat }}">{{ slug_to_title(cat) }}</a></td>
+                    <td>{{ count }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </section>
+
+    <section class="card">
+        <h2>Difficulty Distribution</h2>
+        <div class="diff-bars">
+            {% set max_diff = diff_counts[0][1] if diff_counts else 1 %}
+            {% for diff, count in diff_counts %}
+            <div class="diff-row">
+                <span class="diff-label badge {{ diff }}">{{ diff or "unknown" }}</span>
+                <div class="diff-bar-track">
+                    <div class="diff-bar {{ diff }}" style="width: {{ (count / max_diff * 100)|int }}%"></div>
+                </div>
+                <span class="diff-count">{{ count }}</span>
+            </div>
+            {% endfor %}
+        </div>
+    </section>
+</div>
+{% endblock %}

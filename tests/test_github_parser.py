@@ -70,6 +70,21 @@ class TestReadmeFiltering:
         count = _index(db, "event-name/challenge/README.md")
         assert count == 1
 
+    def test_skips_category_readme(self, db):
+        """README in a category folder is an index, not a writeup."""
+        count = _index(db, "event-name/crypto/README.md")
+        assert count == 0
+
+    def test_skips_category_readme_with_year(self, db):
+        """Category README with year prefix should also be skipped."""
+        count = _index(db, "2024/event-name/pwn/README.md")
+        assert count == 0
+
+    def test_keeps_challenge_readme_under_category(self, db):
+        """README inside event/category/challenge/ is a real writeup."""
+        count = _index(db, "event-name/crypto/my-challenge/README.md")
+        assert count == 1
+
     def test_skips_license_and_contributing(self, db):
         count = _index(db, "LICENSE.md", ".github/PULL_REQUEST_TEMPLATE.md",
                        "CONTRIBUTING.md")

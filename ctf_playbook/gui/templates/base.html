@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}{{ page_title }} — CTF Playbook{% endblock %}</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <nav class="sidebar" id="sidebar">
+        <div class="sidebar-header">
+            <a href="/" class="logo">CTF Playbook</a>
+            <button class="sidebar-toggle" id="sidebar-close" aria-label="Close sidebar">&times;</button>
+        </div>
+        <div class="sidebar-nav">
+            <a href="/" class="nav-link{% if page_title == 'Dashboard' %} active{% endif %}">Dashboard</a>
+            <a href="/search" class="nav-link{% if page_title == 'Search' %} active{% endif %}">Search</a>
+            <a href="/tools" class="nav-link{% if page_title == 'Tool Reference' %} active{% endif %}">Tools</a>
+        </div>
+        <div class="sidebar-tree">
+            {% if tree %}
+            {% for category, techniques in tree.items() %}
+            <details{% if tech is defined and tech.category == category %} open{% endif %}>
+                <summary class="cat-node">
+                    <a href="/category/{{ category }}">{{ slug_to_title(category) }}</a>
+                    <span class="badge count">{{ techniques|length }}</span>
+                </summary>
+                <ul class="tech-list">
+                    {% for t in techniques %}
+                    <li>
+                        <a href="/technique/{{ t.slug }}" class="tech-link{% if slug is defined and slug == t.slug %} active{% endif %}">
+                            {{ slug_to_title(t.slug) }}
+                            <span class="badge {{ t.difficulty }}">{{ t.example_count }}</span>
+                        </a>
+                        {% if t.sub_techniques %}
+                        <ul class="sub-list">
+                            {% for sub in t.sub_techniques %}
+                            <li><a href="/technique/{{ t.slug }}#{{ sub }}" class="sub-link">{{ slug_to_title(sub) }}</a></li>
+                            {% endfor %}
+                        </ul>
+                        {% endif %}
+                    </li>
+                    {% endfor %}
+                </ul>
+            </details>
+            {% endfor %}
+            {% endif %}
+        </div>
+    </nav>
+
+    <main class="content">
+        <button class="sidebar-toggle mobile-menu" id="sidebar-open" aria-label="Open sidebar">&#9776;</button>
+        {% block content %}{% endblock %}
+    </main>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>
