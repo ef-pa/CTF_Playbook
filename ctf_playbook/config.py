@@ -40,3 +40,4 @@ FETCH_MAX_SIZE = 5_000_000  # 5 MB max per page
 # ── Classification (Gemini) ────────────────────────────────────────────────
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMINI_MODEL = "gemini-3.1-flash-lite-preview"
+GEMINI_RPM = 15  # free tier: 15 requests per minute

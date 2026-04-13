@@ -9,10 +9,19 @@ import time
 from pathlib import Path
 
 import google.generativeai as genai
+from google.api_core.exceptions import (
+    ResourceExhausted, TooManyRequests, ServiceUnavailable,
+    InternalServerError, DeadlineExceeded, RetryError,
+)
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn
 
-from ctf_playbook.config import GEMINI_API_KEY, GEMINI_MODEL
+# Transient errors — the writeup itself is fine, the API is temporarily unavailable.
+# These should NOT mark the writeup as failed.
+_TRANSIENT_ERRORS = (ResourceExhausted, TooManyRequests, ServiceUnavailable,
+                     InternalServerError, DeadlineExceeded, RetryError)
+
+from ctf_playbook.config import GEMINI_API_KEY, GEMINI_MODEL, GEMINI_RPM
 from ctf_playbook.taxonomy import TAXONOMY, TECHNIQUE_TO_CATEGORY, get_category, all_sub_slugs
 from ctf_playbook.models import ClassificationResult, TechniqueMatch
 from ctf_playbook.db import (
@@ -23,6 +32,7 @@ from ctf_playbook.db import (
 console = Console()
 
 _configured = False
+_last_request = 0.0  # timestamp of last API call
 
 
 def _ensure_configured():
@@ -31,6 +41,16 @@ def _ensure_configured():
     if not _configured and GEMINI_API_KEY:
         genai.configure(api_key=GEMINI_API_KEY)
         _configured = True
+
+
+def _rate_limit():
+    """Sleep if needed to stay within Gemini free tier RPM."""
+    global _last_request
+    min_interval = 60.0 / GEMINI_RPM  # 4s at 15 RPM
+    elapsed = time.time() - _last_request
+    if elapsed < min_interval:
+        time.sleep(min_interval - elapsed)
+    _last_request = time.time()
 
 
 class TransientAPIError(Exception):
@@ -123,6 +143,7 @@ Original CTF Category: {category or 'unknown'}
 Analyze this writeup and extract the technique information as JSON. Remember: use SPECIFIC technique slugs from the taxonomy, never category names. Only list actual software tools, not programming languages."""
 
     try:
+        _rate_limit()
         prompt = build_classification_prompt()
         model = genai.GenerativeModel(
             model_name=GEMINI_MODEL,
@@ -168,19 +189,13 @@ Analyze this writeup and extract the technique information as JSON. Remember: us
     except json.JSONDecodeError as e:
         console.print(f"  [yellow]JSON parse error:[/] {e}")
         return None  # permanent — the LLM returned unparseable output
+    except _TRANSIENT_ERRORS as e:
+        # Rate limit, quota, or server error — writeup is fine, API is not
+        retry_after = None
+        if isinstance(e, (ResourceExhausted, TooManyRequests)):
+            retry_after = 60.0  # wait a full minute on rate limit
+        raise TransientAPIError(str(e), retry_after=retry_after) from e
     except Exception as e:
-        err_str = str(e).lower()
-        # Detect transient errors (rate limit, connection, server errors)
-        if any(k in err_str for k in ("rate limit", "quota", "429", "500",
-                                       "503", "timeout", "connection")):
-            retry_after = None
-            if "retry" in err_str:
-                # Try to extract a retry delay from the error message
-                import re
-                m = re.search(r"(\d+)\s*s", err_str)
-                if m:
-                    retry_after = float(m.group(1))
-            raise TransientAPIError(str(e), retry_after=retry_after) from e
         console.print(f"  [red]Unexpected error:[/] {e}")
         return None  # permanent — unknown issue with this specific writeup
 
