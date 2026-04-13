@@ -164,10 +164,10 @@ Analyze this writeup and extract the technique information as JSON. Remember: us
         _CATEGORIES = {"binary-exploitation", "web", "cryptography",
                        "reverse-engineering", "forensics", "misc"}
         for tm in technique_matches:
-            # Strip duplicated technique prefix from sub-technique
-            # e.g. sub="heap-exploitation/tcache-poisoning" -> "tcache-poisoning"
-            if tm.sub_technique and tm.sub_technique.startswith(tm.technique + "/"):
-                tm.sub_technique = tm.sub_technique[len(tm.technique) + 1:]
+            # Sub-technique must be a simple slug, never a path
+            # e.g. "heap-exploitation/tcache-poisoning" -> "tcache-poisoning"
+            if tm.sub_technique and "/" in tm.sub_technique:
+                tm.sub_technique = tm.sub_technique.rsplit("/", 1)[-1]
 
             # Promote sub-technique when LLM used a category name as technique
             # e.g. technique="cryptography", sub="chosen-plaintext-attack"

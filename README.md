@@ -94,6 +94,7 @@ uv run ctf-playbook scrape --source github      # Only scrape GitHub
 uv run ctf-playbook fetch --limit 500           # Fetch up to 500 writeups
 uv run ctf-playbook classify --limit 100        # Classify up to 100 writeups
 uv run ctf-playbook classify --category pwn     # Only classify pwn challenges
+uv run ctf-playbook classify --w                # Number of workers
 
 # GUI
 uv run ctf-playbook serve           # Browse the playbook at http://127.0.0.1:8080
