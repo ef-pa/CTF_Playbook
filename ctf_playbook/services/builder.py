@@ -340,7 +340,11 @@ def build_playbook_data() -> dict | None:
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "stats": {
             "total_techniques": len(techniques),
-            "total_writeups": sum(t["example_count"] for t in techniques.values()),
+            "total_writeups": len({
+                ex["url"]
+                for t in techniques.values()
+                for ex in t.get("examples", [])
+            }),
             "total_sub_techniques": total_subs,
         },
         "techniques": techniques,
@@ -391,9 +395,11 @@ def _render_pattern_content(slug: str, tech: dict) -> str:
     for item in tech["tools"]:
         lines.append(f"- **{item['tool']}** (used {item['count']}x)")
 
-    lines += ["", "## Generalized Solve Flow", ""]
-    for i, step in enumerate(tech["solve_steps"], 1):
-        lines.append(f"{i}. {step}")
+    # Only show solve flow for techniques without sub-techniques
+    if tech["solve_steps"] and not tech.get("sub_techniques"):
+        lines += ["", "## Generalized Solve Flow", ""]
+        for i, step in enumerate(tech["solve_steps"], 1):
+            lines.append(f"{i}. {step}")
 
     # Cross-references (if any)
     xrefs = tech.get("cross_references", [])

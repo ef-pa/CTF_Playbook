@@ -79,14 +79,14 @@ export GEMINI_API_KEY="..."          # Required for the classify stage (free tie
 uv run ctf-playbook all
 
 # Or run individual stages
-uv run ctf-playbook scrape          # Discover writeups from CTFtime + GitHub
-uv run ctf-playbook fetch           # Download writeup content
-uv run ctf-playbook classify        # Extract techniques via LLM (auto-cleans first)
-uv run ctf-playbook build           # Generate playbook.json + markdown files
-uv run ctf-playbook export          # Export playbook.json only (no markdown)
-uv run ctf-playbook export -o out.json  # Export to a custom path
-uv run ctf-playbook import data.json    # Import a playbook.json for the GUI
-uv run ctf-playbook serve           # Launch the interactive web GUI
+uv run ctf-playbook scrape                      # Discover writeups from CTFtime + GitHub
+uv run ctf-playbook fetch                       # Download writeup content
+uv run ctf-playbook classify                    # Extract techniques via LLM (auto-cleans first)
+uv run ctf-playbook build                       # Generate playbook.json + markdown files
+uv run ctf-playbook export                      # Export playbook.json only (no markdown)
+uv run ctf-playbook export -o out.json          # Export to a custom path
+uv run ctf-playbook import ./data/playbook.json # Import a playbook.json for the GUI
+uv run ctf-playbook serve                       # Launch the interactive web GUI
 
 # Stage options
 uv run ctf-playbook scrape --max-events 100     # Limit CTFtime events
@@ -94,26 +94,26 @@ uv run ctf-playbook scrape --source github      # Only scrape GitHub
 uv run ctf-playbook fetch --limit 500           # Fetch up to 500 writeups
 uv run ctf-playbook classify --limit 100        # Classify up to 100 writeups
 uv run ctf-playbook classify --category pwn     # Only classify pwn challenges
-uv run ctf-playbook classify --w                # Number of workers
+uv run ctf-playbook classify --w 10             # Run 10 workers at once
 
 # GUI
-uv run ctf-playbook serve           # Browse the playbook at http://127.0.0.1:8080
-uv run ctf-playbook serve --port 3000          # Custom port
-uv run ctf-playbook serve --no-browser         # Don't auto-open browser
+uv run ctf-playbook serve                       # Browse the playbook at http://127.0.0.1:8080
+uv run ctf-playbook serve --port 3000           # Custom port
+uv run ctf-playbook serve --no-browser          # Don't auto-open browser
 
 # Utilities
-uv run ctf-playbook stats           # Database statistics (includes sub-technique breakdown)
-uv run ctf-playbook search "heap"   # Search classified writeups by keyword
+uv run ctf-playbook stats                       # Database statistics (includes sub-technique breakdown)
+uv run ctf-playbook search "heap"               # Search classified writeups by keyword
 uv run ctf-playbook search -t buffer-overflow   # Filter by technique
 uv run ctf-playbook search --tool gdb           # Filter by tool
-uv run ctf-playbook dedup           # Remove duplicate writeups (by content hash)
-uv run ctf-playbook clean           # Purge junk content from fetched writeups
-uv run ctf-playbook fix-categories  # Backfill challenge categories from technique data
+uv run ctf-playbook dedup                       # Remove duplicate writeups (by content hash)
+uv run ctf-playbook clean                       # Purge junk content from fetched writeups
+uv run ctf-playbook fix-categories              # Backfill challenge categories from technique data
 
 # Sub-technique management
-uv run ctf-playbook promote         # Review and promote discovered sub-techniques
-uv run ctf-playbook promote --threshold 5   # Require 5+ occurrences
-uv run ctf-playbook soft-reset      # Reset classifications for re-classification
+uv run ctf-playbook promote                     # Review and promote discovered sub-techniques
+uv run ctf-playbook promote --threshold 5       # Require 5+ occurrences
+uv run ctf-playbook soft-reset                  # Reset classifications for re-classification
 ```
 
 ## Testing

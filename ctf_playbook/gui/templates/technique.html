@@ -42,7 +42,7 @@
 </section>
 {% endif %}
 
-{% if tech.solve_steps %}
+{% if tech.solve_steps and not tech.sub_techniques %}
 <section class="card">
     <h2>Solve Flow</h2>
     <ol class="solve-steps">
