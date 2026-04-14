@@ -435,6 +435,7 @@ def _serialize_technique(slug: str, data: dict,
         result["sub_techniques"] = {
             sub_slug: _serialize_technique(sub_slug, sd)
             for sub_slug, sd in sorted(sub_data.items())
+            if sub_slug != slug  # skip self-referential sub-techniques
         }
 
     return result
