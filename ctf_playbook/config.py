@@ -46,6 +46,9 @@ REDDIT_MIN_SCORE = 2  # filter low-quality posts
 BLOG_DELAY = 1.0  # seconds between feed fetches
 
 # ── Classification (Gemini) ────────────────────────────────────────────────
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+# Supports multiple comma-separated keys for parallel throughput:
+#   GEMINI_API_KEY=key1,key2,key3  →  3 × 15 RPM = 45 RPM
+_raw_keys = os.getenv("GEMINI_API_KEY", "")
+GEMINI_API_KEYS: list[str] = [k.strip() for k in _raw_keys.split(",") if k.strip()]
 GEMINI_MODEL = "gemini-3.1-flash-lite-preview"
-GEMINI_RPM = 15  # free tier: 15 requests per minute
+GEMINI_RPM = 15  # free tier: 15 requests per minute per key

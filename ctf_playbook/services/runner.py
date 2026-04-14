@@ -6,7 +6,7 @@ from pathlib import Path
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn
 
-from ctf_playbook.config import GEMINI_API_KEY
+from ctf_playbook.config import GEMINI_API_KEYS, GEMINI_RPM
 from ctf_playbook.taxonomy import TECHNIQUE_TO_CATEGORY, get_category, all_sub_slugs
 from ctf_playbook.models import ClassificationResult
 from ctf_playbook.db import (
@@ -59,9 +59,13 @@ def run(limit: int = 100, category: str = None, workers: int = 1):
     """Main entry point: classify unclassified writeups."""
     console.rule("[bold blue]Writeup Classifier")
 
-    if not GEMINI_API_KEY:
+    if not GEMINI_API_KEYS:
         console.print("[red]Set GEMINI_API_KEY to use the classifier[/]")
         return
+
+    n_keys = len(GEMINI_API_KEYS)
+    total_rpm = n_keys * GEMINI_RPM
+    console.print(f"Using [cyan]{n_keys}[/] API key{'s' if n_keys > 1 else ''} ({total_rpm} RPM)")
 
     with db_session() as conn:
         unclassified = get_unclassified(conn, limit=limit, category=category)

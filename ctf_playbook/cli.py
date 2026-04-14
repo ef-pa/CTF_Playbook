@@ -483,10 +483,10 @@ def promote(threshold):
 def compare(limit, category):
     """Re-classify stored writeups and compare against previous results."""
     from pathlib import Path
-    from ctf_playbook.config import GEMINI_API_KEY
+    from ctf_playbook.config import GEMINI_API_KEYS
     from ctf_playbook.services.classifier import classify_writeup
 
-    if not GEMINI_API_KEY:
+    if not GEMINI_API_KEYS:
         console.print("[red]Set GEMINI_API_KEY in your .env to use comparison[/]")
         return
 
