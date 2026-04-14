@@ -158,6 +158,14 @@ class ChallengeMatcher:
                     )
             best_sub = max(sub_scores, key=sub_scores.get) if sub_scores else None
 
+            # Use sub-technique solve_steps when available
+            solve_steps = tech.get("solve_steps", [])
+            if best_sub:
+                sub_tech = tech.get("sub_techniques", {}).get(best_sub, {})
+                sub_steps = sub_tech.get("solve_steps", [])
+                if sub_steps:
+                    solve_steps = sub_steps
+
             results.append(MatchResult(
                 technique=slug,
                 category=tech.get("category", "misc"),
@@ -165,7 +173,7 @@ class ChallengeMatcher:
                 matched_signals=signals[:5],
                 difficulty=tech.get("difficulty", "medium"),
                 tools=[t["tool"] for t in tech.get("tools", [])[:5]],
-                solve_steps=tech.get("solve_steps", []),
+                solve_steps=solve_steps,
                 sub_technique=best_sub,
                 example_count=tech.get("example_count", 0),
             ))

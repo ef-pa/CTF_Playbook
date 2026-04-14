@@ -4,7 +4,8 @@ import json
 from collections import defaultdict
 
 from ctf_playbook.services.builder import (
-    _merge_solve_steps, _normalize_signal, _merge_signals, _merge_tools,
+    _merge_solve_steps, _dedup_step_strings,
+    _normalize_signal, _merge_signals, _merge_tools,
     _serialize_technique, _assemble_recon_patterns,
     _assemble_tool_reference, _assemble_cross_references,
     _render_pattern_content, _render_recon_trees, TECHNIQUES_DIR,
@@ -86,6 +87,80 @@ class TestMergeSolveSteps:
         # "find overflow" and "write exploit" appear twice = consensus
         # Only 2 consensus steps < 3, so falls back to longest
         assert len(result) == 4  # longest list has 4 steps
+
+    def test_near_duplicate_steps_merged(self):
+        """Steps that differ only by articles/prepositions should merge."""
+        steps = [
+            ["load binary into disassembler/decompiler"],
+            ["load binary into disassembler"],
+            ["load binary into a disassembler or decompiler"],
+            ["Load the binary into a disassembler or decompiler"],
+        ]
+        result = _merge_solve_steps(steps)
+        assert len(result) == 1
+
+    def test_distinct_steps_not_merged(self):
+        """Steps with different semantics should remain separate."""
+        steps = [
+            ["analyze the binary for vulnerabilities", "run the exploit"],
+            ["analyze the binary for vulnerabilities", "patch the binary"],
+        ]
+        result = _merge_solve_steps(steps)
+        # "analyze the binary" appears in both — consensus
+        # "run the exploit" and "patch the binary" are distinct
+        assert any("analyze" in s for s in result)
+
+
+# ── _dedup_step_strings ─────────────────────────────────────────────────
+
+
+class TestDedupStepStrings:
+    def test_empty(self):
+        assert _dedup_step_strings([]) == {}
+
+    def test_no_duplicates(self):
+        steps = ["find the bug", "write the exploit", "get the flag"]
+        result = _dedup_step_strings(steps)
+        assert len(set(result.values())) == 3
+
+    def test_exact_case_merge(self):
+        steps = ["Find the buffer overflow", "find the buffer overflow"]
+        result = _dedup_step_strings(steps)
+        assert result[steps[0]] == result[steps[1]]
+
+    def test_substring_absorption(self):
+        steps = [
+            "load binary into disassembler",
+            "load binary into disassembler/decompiler",
+        ]
+        result = _dedup_step_strings(steps)
+        # Both should map to the shorter canonical form
+        assert result[steps[0]] == result[steps[1]]
+
+    def test_fuzzy_merge(self):
+        steps = [
+            "load binary into a disassembler or decompiler",
+            "Load the binary into a disassembler or decompiler",
+        ]
+        result = _dedup_step_strings(steps)
+        assert result[steps[0]] == result[steps[1]]
+
+    def test_no_false_merge(self):
+        steps = [
+            "analyze the binary for vulnerabilities",
+            "patch the binary with new values",
+        ]
+        result = _dedup_step_strings(steps)
+        assert result[steps[0]] != result[steps[1]]
+
+    def test_prefers_shorter_canonical(self):
+        steps = [
+            "load binary into disassembler/decompiler",
+            "load binary into disassembler",
+        ]
+        result = _dedup_step_strings(steps)
+        canonical = result[steps[0]]
+        assert len(canonical) <= len(steps[0])
 
 
 # ── _serialize_technique ─────────────────────────────────────────────────

@@ -165,3 +165,21 @@ class TestChallengeMatcher:
         results = self.matcher.identify("buffer overflow", min_confidence=50.0)
         for r in results:
             assert r.confidence >= 50.0
+
+    def test_sub_technique_solve_steps(self):
+        """When a sub-technique matches, its solve_steps should be shown."""
+        results = self.matcher.identify(
+            "RSA with extremely large public exponent e"
+        )
+        rsa = next((r for r in results if r.technique == "rsa-attacks"), None)
+        assert rsa is not None
+        assert rsa.sub_technique == "wiener"
+        # Should return the wiener sub-technique's steps, not the parent's
+        assert rsa.solve_steps == ["compute continued fraction expansion"]
+
+    def test_technique_solve_steps_without_sub(self):
+        """When no sub-technique matches, technique-level steps are shown."""
+        results = self.matcher.identify("binary with gets() and no canary")
+        m = results[0]
+        assert m.sub_technique is None
+        assert m.solve_steps == ["find overflow", "calculate offset", "build exploit"]

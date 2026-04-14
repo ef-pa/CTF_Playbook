@@ -79,7 +79,7 @@ export GEMINI_API_KEY="..."          # Required for the classify stage (free tie
 uv run ctf-playbook all
 
 # Or run individual stages
-uv run ctf-playbook scrape                      # Discover writeups from CTFtime + GitHub
+uv run ctf-playbook scrape                      # Discover writeups from select sources
 uv run ctf-playbook fetch                       # Download writeup content
 uv run ctf-playbook classify                    # Extract techniques via LLM (auto-cleans first)
 uv run ctf-playbook build                       # Generate playbook.json + markdown files

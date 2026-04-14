@@ -55,21 +55,105 @@ def build_folder_structure():
     (PLAYBOOK_DIR / "raw-writeups").mkdir(parents=True, exist_ok=True)
 
 
+def _dedup_step_strings(steps: list[str],
+                        similarity_threshold: float = 0.90) -> dict[str, str]:
+    """Map each step string to a canonical (deduplicated) form.
+
+    Three-pass approach matching _merge_signals():
+    1. Exact match after normalization
+    2. Substring absorption (shorter subsumes longer)
+    3. Fuzzy similarity via SequenceMatcher
+
+    Returns dict mapping every original step to its canonical form.
+    """
+    if not steps:
+        return {}
+
+    # Pass 1: Group by normalized form, prefer shorter as canonical
+    groups: dict[str, str] = {}  # normalized -> canonical original
+    for step in steps:
+        key = _normalize_signal(step)
+        if not key:
+            continue
+        if key not in groups or len(step) < len(groups[key]):
+            groups[key] = step
+
+    # Pass 2: Substring absorption
+    keys = sorted(groups.keys(), key=len)
+    absorbed: dict[str, str] = {}  # absorbed_key -> absorber_key
+    for i, shorter in enumerate(keys):
+        if shorter in absorbed:
+            continue
+        for longer in keys[i + 1:]:
+            if longer in absorbed:
+                continue
+            if shorter in longer:
+                absorbed[longer] = shorter
+
+    # Pass 3: Fuzzy similarity merge
+    remaining = [k for k in keys if k not in absorbed]
+    merged_into: dict[str, str] = {}  # key -> target_key
+    for i in range(len(remaining)):
+        if remaining[i] in merged_into:
+            continue
+        for j in range(i + 1, len(remaining)):
+            if remaining[j] in merged_into:
+                continue
+            ratio = SequenceMatcher(None, remaining[i], remaining[j]).ratio()
+            if ratio >= similarity_threshold:
+                merged_into[remaining[j]] = remaining[i]
+
+    # Resolve chains
+    for src in list(merged_into):
+        dst = merged_into[src]
+        while dst in merged_into:
+            dst = merged_into[dst]
+        merged_into[src] = dst
+
+    # Build final mapping: original step -> canonical step
+    def _canonical_key(key: str) -> str:
+        if key in absorbed:
+            key = absorbed[key]
+        if key in merged_into:
+            key = merged_into[key]
+        return key
+
+    result = {}
+    for step in steps:
+        key = _normalize_signal(step)
+        if not key:
+            result[step] = step
+            continue
+        canon_key = _canonical_key(key)
+        result[step] = groups[canon_key]
+    return result
+
+
 def _merge_solve_steps(step_lists: list[list[str]], max_steps: int = 7) -> list[str]:
     """Merge multiple solve step lists into a generalized flow.
 
-    Uses frequency and positional analysis: steps that appear across multiple
-    writeups are preferred, ordered by their average position. Falls back to
-    the longest individual step list when there isn't enough consensus.
+    First deduplicates near-identical steps (substring, fuzzy matching),
+    then uses frequency and positional analysis: steps that appear across
+    multiple writeups are preferred, ordered by their average position.
+    Falls back to the longest individual step list when there isn't enough
+    consensus.
     """
     if not step_lists:
         return []
     if len(step_lists) == 1:
         return step_lists[0][:max_steps]
 
+    # Dedup near-identical steps across all lists
+    all_steps = [step for steps in step_lists for step in steps]
+    canonical_map = _dedup_step_strings(all_steps)
+    canon_lists = [
+        [canonical_map[step] for step in steps]
+        for steps in step_lists
+    ]
+
     # Track each normalized step's frequency and average position
     step_info: dict[str, dict] = {}  # normalized -> {original, count, total_pos}
-    for steps in step_lists:
+    for steps in canon_lists:
         for pos, step in enumerate(steps):
             key = step.strip().lower()
             if key not in step_info:
@@ -84,8 +168,8 @@ def _merge_solve_steps(step_lists: list[list[str]], max_steps: int = 7) -> list[
         consensus.sort(key=lambda s: s["total_pos"] / s["count"])
         return [s["original"] for s in consensus[:max_steps]]
 
-    # Not enough consensus — use the longest individual step list
-    longest = max(step_lists, key=len)
+    # Not enough consensus — use the longest individual (canonicalized) step list
+    longest = max(canon_lists, key=len)
     return longest[:max_steps]
 
 
