@@ -1,51 +1,14 @@
 # CTF Playbook Builder
 
-A pipeline that scrapes thousands of CTF (Capture The Flag) writeups from CTFtime and GitHub,
+A pipeline that scrapes thousands of CTF (Capture The Flag) writeups from CTFtime, GitHub, Reddit, and curated blog feeds,
 downloads the content, classifies them using an LLM to extract solving techniques/tools/patterns,
 and organizes everything into a technique-based playbook designed to help solve new challenges.
 
 ## Architecture
 
-```mermaid
-flowchart LR
-    subgraph Sources
-        CT[CTFtime]
-        GH[GitHub]
-    end
-
-    subgraph Pipeline
-        direction LR
-        S[1. Scrape]
-        F[2. Fetch]
-        C[3. Clean]
-        CL[4. Classify]
-        B[5. Build]
-        S --> F --> C --> CL --> B
-    end
-
-    subgraph Storage
-        DB[(SQLite)]
-        PJ[playbook.json]
-    end
-
-    subgraph Output
-        MD[Markdown Files]
-        GUI[Web GUI]
-    end
-
-    CT --> S
-    GH --> S
-    S --- DB
-    F --- DB
-    CL --- DB
-    B --> PJ
-    PJ --> MD
-    PJ --> GUI
-```
-
 ### Stages
 
-1. **Scrape** (`ctf_playbook/scrapers/`) — Crawl CTFtime events + tasks + writeup links; discover GitHub repos. Stores metadata in SQLite.
+1. **Scrape** (`ctf_playbook/scrapers/`) — Crawl CTFtime events + tasks + writeup links; discover GitHub repos; search Reddit CTF subreddits; parse curated blog RSS feeds. All scrapers inherit from a shared `BaseScraper` class. Stores metadata in SQLite.
 2. **Fetch** (`ctf_playbook/services/fetcher.py`) — Download writeup content (HTML->text via trafilatura, raw markdown). Filters out junk (link indexes, too-short content). Saves to `playbook/raw-writeups/`.
 3. **Clean** (automatic) — Runs automatically before classification. Backfills content hashes, removes writeups from excluded repos, re-checks content quality, and deduplicates by content hash. No LLM tokens wasted on junk or duplicates.
 4. **Classify** (`ctf_playbook/services/classifier.py`) — Send fetched writeups to Gemini for structured analysis. Extracts: techniques (with sub-techniques), tools, recognition signals, solve steps, difficulty. Stores results as JSON in the DB.
@@ -101,6 +64,10 @@ uv run ctf-playbook serve                       # Browse the playbook at http://
 uv run ctf-playbook serve --port 3000           # Custom port
 uv run ctf-playbook serve --no-browser          # Don't auto-open browser
 
+# Identify techniques from a challenge description
+uv run ctf-playbook identify "binary with gets() and no canary"
+uv run ctf-playbook identify --file challenge.txt
+
 # Utilities
 uv run ctf-playbook stats                       # Database statistics (includes sub-technique breakdown)
 uv run ctf-playbook search "heap"               # Search classified writeups by keyword
@@ -126,7 +93,8 @@ uv run pytest
 
 - **CTFtime**: 1.5s delay between requests (be respectful)
 - **GitHub API**: 5,000 req/hr with token, 60/hr without
-- **Blog fetching**: 1s delay per domain, randomized
+- **Reddit**: 2s delay between requests
+- **Blog RSS**: 1s delay between feed fetches
 
 ## Interactive GUI
 
@@ -137,12 +105,13 @@ The playbook includes a local web app for browsing techniques, searching writeup
 - **Dashboard** — Stats cards, category breakdown, difficulty distribution
 - **Technique Detail** — Recognition signals, tools, solve flow, cross-references, sub-technique cards, example writeups
 - **Category Overview** — Sortable table of techniques with writeup counts, difficulty, sub-techniques
+- **Identify** — Paste a challenge description and match it against recognition signals to identify likely techniques
 - **Recon Patterns** — Per-category recognition patterns for quick triage during CTFs
 - **Search** — Full-text search with filters by technique, tool, and difficulty
 - **Tool Reference** — Searchable table of tools with usage counts and linked techniques
 - **Sidebar Tree** — Persistent taxonomy navigation grouped by category, with sub-technique deep links
 
-The GUI also exposes a JSON API at `/api/stats`, `/api/techniques`, `/api/technique/{slug}`, and `/api/search` for programmatic access.
+The GUI also exposes a JSON API at `/api/stats`, `/api/techniques`, `/api/technique/{slug}`, `/api/search`, and `/api/identify` for programmatic access.
 
 ## Taxonomy Design
 
