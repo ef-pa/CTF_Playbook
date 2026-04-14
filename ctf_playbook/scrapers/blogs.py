@@ -4,24 +4,13 @@ Maintains a list of known CTF team and player blogs. Parses their
 RSS/Atom feeds to index writeup posts.
 """
 
-import time
-from typing import Optional
+from typing import Iterator
 
-import requests
 from lxml import etree
-from rich.console import Console
-from rich.progress import Progress, SpinnerColumn, TextColumn
 
 from ctf_playbook.config import BLOG_DELAY
-from ctf_playbook.db import db_session, upsert_event, upsert_challenge, insert_writeup
+from ctf_playbook.scrapers._base import BaseScraper, WriteupItem, make_synthetic_id
 from ctf_playbook.scrapers._title_parser import parse_ctf_title, is_writeup_title
-
-console = Console()
-
-SESSION = requests.Session()
-SESSION.headers.update({
-    "User-Agent": "CTF-Playbook-Builder/1.0 (RSS reader; research)",
-})
 
 # Curated list of CTF blog feeds — expandable
 CURATED_FEEDS = [
@@ -37,19 +26,6 @@ CURATED_FEEDS = [
 ]
 
 
-def _fetch_feed(url: str) -> Optional[bytes]:
-    """Download a feed with rate limiting."""
-    time.sleep(BLOG_DELAY)
-    try:
-        resp = SESSION.get(url, timeout=15)
-        if resp.status_code == 200:
-            return resp.content
-        console.print(f"  [yellow]HTTP {resp.status_code}[/] for {url}")
-    except requests.RequestException as e:
-        console.print(f"  [yellow]Feed error ({url}):[/] {e}")
-    return None
-
-
 def _parse_feed(xml_bytes: bytes) -> list[dict]:
     """Parse an RSS 2.0 or Atom feed into a list of entries."""
     entries = []
@@ -58,7 +34,6 @@ def _parse_feed(xml_bytes: bytes) -> list[dict]:
     except etree.XMLSyntaxError:
         return []
 
-    # Namespace map for Atom
     ns = {"atom": "http://www.w3.org/2005/Atom"}
 
     # Try RSS 2.0 first: <rss><channel><item>
@@ -81,7 +56,6 @@ def _parse_feed(xml_bytes: bytes) -> list[dict]:
     # Try Atom: <feed><entry>
     atom_entries = root.findall("atom:entry", ns)
     if not atom_entries:
-        # Some feeds don't use namespaces
         atom_entries = root.findall("entry")
     for entry in atom_entries:
         title = (entry.findtext("atom:title", "", ns)
@@ -110,60 +84,48 @@ def _parse_feed(xml_bytes: bytes) -> list[dict]:
     return entries
 
 
-def index_feed(feed_config: dict, conn) -> int:
-    """Fetch and parse one feed, indexing writeup entries."""
-    xml = _fetch_feed(feed_config["url"])
-    if not xml:
-        return 0
+class BlogScraper(BaseScraper):
+    display_name = "Blog RSS Scraper"
+    source_tag = "blog"
+    delay = BLOG_DELAY
+    default_headers = {
+        "User-Agent": "CTF-Playbook-Builder/1.0 (RSS reader; research)",
+    }
 
-    entries = _parse_feed(xml)
-    count = 0
+    def scrape(self, conn, max_feeds: int | None = None,
+               **kwargs) -> Iterator[WriteupItem]:
+        feeds = CURATED_FEEDS[:max_feeds] if max_feeds else CURATED_FEEDS
+        for feed in feeds:
+            resp = self.fetch(feed["url"])
+            if not resp:
+                continue
 
-    for entry in entries:
-        title = entry["title"]
+            entries = _parse_feed(resp.content)
+            for entry in entries:
+                title = entry["title"]
 
-        # Filter: must look like a writeup
-        cat_hint = any(
-            kw in c.lower()
-            for c in entry["categories"]
-            for kw in ("ctf", "writeup", "security", "hacking", "challenge")
-        )
-        if not is_writeup_title(title) and not cat_hint:
-            continue
+                cat_hint = any(
+                    kw in c.lower()
+                    for c in entry["categories"]
+                    for kw in ("ctf", "writeup", "security", "hacking", "challenge")
+                )
+                if not is_writeup_title(title) and not cat_hint:
+                    continue
 
-        parsed = parse_ctf_title(title)
-        event_name = parsed["event_name"] or feed_config["name"]
-        challenge_name = parsed["challenge_name"] or title
-        year = parsed["year"] or 0
-        category = parsed["category"]
-
-        ctftime_id = abs(hash(f"blog:{event_name}")) % 10_000_000
-
-        event_id = upsert_event(conn, ctftime_id, event_name, year,
-                                url=feed_config["url"])
-        challenge_id = upsert_challenge(conn, event_id, challenge_name, category)
-        if insert_writeup(conn, challenge_id, "blog", entry["url"],
-                          team=feed_config["name"]):
-            count += 1
-
-    return count
+                parsed = parse_ctf_title(title)
+                yield WriteupItem(
+                    event_name=parsed["event_name"] or feed["name"],
+                    challenge_name=parsed["challenge_name"] or title,
+                    writeup_url=entry["url"],
+                    source="blog",
+                    ctftime_id=make_synthetic_id("blog",
+                                                 parsed["event_name"] or feed["name"]),
+                    year=parsed["year"] or 0,
+                    category=parsed["category"],
+                    event_url=feed["url"],
+                    team=feed["name"],
+                )
 
 
-def run(max_feeds: int | None = None):
-    """Main entry point: discover and index blog RSS writeups."""
-    console.rule("[bold blue]Blog RSS Scraper")
-
-    feeds = CURATED_FEEDS[:max_feeds] if max_feeds else CURATED_FEEDS
-
-    with db_session() as conn:
-        total = 0
-        with Progress(SpinnerColumn(), TextColumn("{task.description}"),
-                      console=console) as progress:
-            for feed in feeds:
-                task = progress.add_task(f"Fetching {feed['name']}...", total=None)
-                n = index_feed(feed, conn)
-                progress.update(task,
-                                description=f"{feed['name']}: {n} writeups indexed")
-                total += n
-
-        console.print(f"\nTotal: [green]{total}[/] writeups from {len(feeds)} feeds")
+def run(**kwargs):
+    BlogScraper().run(**kwargs)

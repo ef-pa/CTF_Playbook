@@ -39,7 +39,7 @@ def db(tmp_path):
 
 def _index(db, *paths):
     """Run index_repo_writeups with mocked API returning the given paths."""
-    with patch("ctf_playbook.scrapers.github._gh_get", return_value=_tree(*paths)):
+    with patch("ctf_playbook.scrapers.github.GitHubScraper._get_json", return_value=_tree(*paths)):
         return index_repo_writeups(MOCK_REPO, db)
 
 
