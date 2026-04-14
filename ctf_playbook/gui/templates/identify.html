@@ -74,7 +74,7 @@ async function runIdentify() {
 
             let stepsHtml = '';
             if (m.solve_steps && m.solve_steps.length) {
-                stepsHtml = '<h4>Solve Flow</h4><ol class="solve-steps compact">';
+                stepsHtml = '<h4>Common Solve Steps</h4><ol class="solve-steps compact">';
                 for (const step of m.solve_steps.slice(0, 5)) {
                     stepsHtml += '<li>' + escapeHtml(step) + '</li>';
                 }

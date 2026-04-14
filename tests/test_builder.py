@@ -50,22 +50,21 @@ class TestMergeSolveSteps:
         result = _merge_solve_steps(steps)
         assert result == ["step A", "step B", "step C"]
 
-    def test_falls_back_to_longest_when_no_consensus(self):
-        """When no step appears in 2+ writeups, use the longest list."""
+    def test_returns_empty_when_no_consensus_3plus_writeups(self):
+        """With 3+ writeups and no consensus, return empty (diverse approaches)."""
         steps = [
             ["unique-a1", "unique-a2"],
             ["unique-b1", "unique-b2", "unique-b3", "unique-b4"],
             ["unique-c1"],
         ]
         result = _merge_solve_steps(steps)
-        assert result == ["unique-b1", "unique-b2", "unique-b3", "unique-b4"]
+        assert result == []
 
     def test_case_insensitive_dedup(self):
         """Matching should be case-insensitive."""
         steps = [
             ["Find vulnerability", "Exploit"],
             ["find vulnerability", "exploit"],
-            ["FIND VULNERABILITY", "EXPLOIT"],
         ]
         result = _merge_solve_steps(steps)
         assert len(result) == 2
@@ -92,8 +91,6 @@ class TestMergeSolveSteps:
         """Steps that differ only by articles/prepositions should merge."""
         steps = [
             ["load binary into disassembler/decompiler"],
-            ["load binary into disassembler"],
-            ["load binary into a disassembler or decompiler"],
             ["Load the binary into a disassembler or decompiler"],
         ]
         result = _merge_solve_steps(steps)

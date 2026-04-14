@@ -44,7 +44,7 @@
 
 {% if tech.solve_steps and not tech.sub_techniques %}
 <section class="card">
-    <h2>Solve Flow</h2>
+    <h2>Common Solve Steps</h2>
     <ol class="solve-steps">
         {% for step in tech.solve_steps %}
         <li>{{ step }}</li>
@@ -99,7 +99,7 @@
             {% endif %}
 
             {% if sub.solve_steps %}
-            <h4>Solve Flow</h4>
+            <h4>Common Solve Steps</h4>
             <ol class="solve-steps compact">
                 {% for step in sub.solve_steps %}
                 <li>{{ step }}</li>

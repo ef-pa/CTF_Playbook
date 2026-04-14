@@ -135,8 +135,9 @@ def _merge_solve_steps(step_lists: list[list[str]], max_steps: int = 7) -> list[
     First deduplicates near-identical steps (substring, fuzzy matching),
     then uses frequency and positional analysis: steps that appear across
     multiple writeups are preferred, ordered by their average position.
-    Falls back to the longest individual step list when there isn't enough
-    consensus.
+    For 1-2 writeups, falls back to the longest list when consensus is
+    insufficient. For 3+ writeups without consensus, returns empty (diverse
+    approaches mean no single flow is representative).
     """
     if not step_lists:
         return []
@@ -168,9 +169,13 @@ def _merge_solve_steps(step_lists: list[list[str]], max_steps: int = 7) -> list[
         consensus.sort(key=lambda s: s["total_pos"] / s["count"])
         return [s["original"] for s in consensus[:max_steps]]
 
-    # Not enough consensus — use the longest individual (canonicalized) step list
-    longest = max(canon_lists, key=len)
-    return longest[:max_steps]
+    # Low data (2 writeups): fall back to longest list
+    if len(step_lists) <= 2:
+        longest = max(canon_lists, key=len)
+        return longest[:max_steps]
+
+    # 3+ writeups but no consensus — don't show misleading steps
+    return []
 
 
 def _normalize_signal(signal: str) -> str:
@@ -570,9 +575,9 @@ def _render_pattern_content(slug: str, tech: dict) -> str:
     for item in tech["tools"]:
         lines.append(f"- **{item['tool']}** (used {item['count']}x)")
 
-    # Only show solve flow for techniques without sub-techniques
+    # Only show solve steps for techniques without sub-techniques
     if tech["solve_steps"] and not tech.get("sub_techniques"):
-        lines += ["", "## Generalized Solve Flow", ""]
+        lines += ["", "## Common Solve Steps", ""]
         for i, step in enumerate(tech["solve_steps"], 1):
             lines.append(f"{i}. {step}")
 
