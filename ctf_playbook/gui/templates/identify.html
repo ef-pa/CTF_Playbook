@@ -1,0 +1,128 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>What Am I Looking At?</h1>
+<p class="section-hint">Paste a challenge description or key observations to identify likely techniques.</p>
+
+<div class="card">
+    <textarea id="identify-input" class="identify-textarea"
+        placeholder="e.g. Given a pcap file, reconstruct the TCP stream to find the flag hidden in DNS queries..."></textarea>
+    <div class="identify-actions">
+        <button id="identify-btn" class="btn primary" onclick="runIdentify()">Match</button>
+        <button class="btn" onclick="document.getElementById('identify-input').value=''; document.getElementById('identify-results').innerHTML=''">Clear</button>
+    </div>
+</div>
+
+<div id="identify-results"></div>
+
+<script>
+async function runIdentify() {
+    const text = document.getElementById('identify-input').value.trim();
+    const container = document.getElementById('identify-results');
+    const btn = document.getElementById('identify-btn');
+
+    if (!text) {
+        container.innerHTML = '<p class="section-hint">Enter some text to match against.</p>';
+        return;
+    }
+
+    btn.disabled = true;
+    btn.textContent = 'Matching...';
+    container.innerHTML = '';
+
+    try {
+        const resp = await fetch('/api/identify', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({text, max_results: 10}),
+        });
+        const data = await resp.json();
+
+        if (!data.matches || data.matches.length === 0) {
+            container.innerHTML = '<div class="card"><p>No matches found. Try a more detailed description.</p></div>';
+            return;
+        }
+
+        container.innerHTML = '<h2>' + data.matches.length + ' match' + (data.matches.length !== 1 ? 'es' : '') + ' found</h2>';
+
+        for (const m of data.matches) {
+            const card = document.createElement('div');
+            card.className = 'card match-card';
+
+            let title = '<a href="/technique/' + m.technique + '">' + slugToTitle(m.technique) + '</a>';
+            if (m.sub_technique) {
+                title += ' / ' + slugToTitle(m.sub_technique);
+            }
+
+            let signalHtml = '';
+            if (m.matched_signals && m.matched_signals.length) {
+                signalHtml = '<h4>Matched Signals</h4><ul class="signal-list compact">';
+                for (const sig of m.matched_signals) {
+                    const icon = sig.match_type === 'phrase' ? '*' : '-';
+                    signalHtml += '<li><span class="signal-text">' + icon + ' ' + escapeHtml(sig.signal) + '</span> <span class="badge count">' + sig.count + '</span></li>';
+                }
+                signalHtml += '</ul>';
+            }
+
+            let toolHtml = '';
+            if (m.tools && m.tools.length) {
+                toolHtml = '<div class="tool-tags compact">';
+                for (const t of m.tools) {
+                    toolHtml += '<span class="tool-tag">' + escapeHtml(t) + '</span>';
+                }
+                toolHtml += '</div>';
+            }
+
+            let stepsHtml = '';
+            if (m.solve_steps && m.solve_steps.length) {
+                stepsHtml = '<h4>Solve Flow</h4><ol class="solve-steps compact">';
+                for (const step of m.solve_steps.slice(0, 5)) {
+                    stepsHtml += '<li>' + escapeHtml(step) + '</li>';
+                }
+                stepsHtml += '</ol>';
+            }
+
+            card.innerHTML =
+                '<div class="match-header">' +
+                    '<h3>' + title + '</h3>' +
+                    '<div class="header-badges">' +
+                        '<span class="badge category">' + slugToTitle(m.category) + '</span>' +
+                        '<span class="badge ' + m.difficulty + '">' + m.difficulty + '</span>' +
+                        '<span class="badge count">' + m.example_count + ' writeups</span>' +
+                    '</div>' +
+                '</div>' +
+                '<div class="confidence-row">' +
+                    '<span class="confidence-label">' + m.confidence.toFixed(0) + '%</span>' +
+                    '<div class="confidence-track"><div class="confidence-bar" style="width:' + m.confidence + '%"></div></div>' +
+                '</div>' +
+                signalHtml + toolHtml + stepsHtml;
+
+            container.appendChild(card);
+        }
+    } catch (err) {
+        container.innerHTML = '<div class="card"><p style="color:var(--red)">Error: ' + err.message + '</p></div>';
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'Match';
+    }
+}
+
+function slugToTitle(slug) {
+    const acronyms = new Set(['sql','xss','xxe','css','rsa','aes','des','rce','lfi','rfi','ssrf','csrf','idor','jwt','xml','php','rop','got','plt','dns','tcp','udp','http','smtp','ftp','ssh','tls','ssl','api','cbc','ecb','gcm','ecc','dsa','ecdsa','sha','md5','rc4','xor','dom','ssti','iot','usb','pdf','png','pcap','osint','dfir','bof','uaf']);
+    return slug.replace(/-/g, ' ').split(' ').map(w => acronyms.has(w.toLowerCase()) ? w.toUpperCase() : w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+}
+
+function escapeHtml(str) {
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+}
+
+// Support Enter key in textarea (Ctrl+Enter to submit)
+document.getElementById('identify-input').addEventListener('keydown', function(e) {
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        runIdentify();
+    }
+});
+</script>
+{% endblock %}

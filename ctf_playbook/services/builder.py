@@ -7,8 +7,10 @@ Three-phase pipeline:
 """
 
 import json
+import re
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
+from difflib import SequenceMatcher
 from itertools import combinations
 from pathlib import Path
 
@@ -85,6 +87,92 @@ def _merge_solve_steps(step_lists: list[list[str]], max_steps: int = 7) -> list[
     # Not enough consensus — use the longest individual step list
     longest = max(step_lists, key=len)
     return longest[:max_steps]
+
+
+def _normalize_signal(signal: str) -> str:
+    """Normalize a signal string for dedup comparison."""
+    s = signal.strip().lower()
+    s = s.rstrip(".,;:!?")
+    s = re.sub(r"\s+", " ", s)
+    return s
+
+
+def _merge_signals(raw_signals: dict[str, int],
+                   similarity_threshold: float = 0.85) -> dict[str, int]:
+    """Merge near-duplicate recognition signals.
+
+    Three-pass approach:
+    1. Exact match after normalization (case, whitespace, punctuation)
+    2. Substring absorption (shorter signal subsumes longer)
+    3. Fuzzy similarity via SequenceMatcher
+    """
+    # Pass 1: Group by normalized form
+    groups: dict[str, dict] = {}  # normalized_key -> {canonical, count}
+    for signal, count in raw_signals.items():
+        key = _normalize_signal(signal)
+        if not key:
+            continue
+        if key in groups:
+            groups[key]["count"] += count
+            # Prefer shorter signal as canonical (more general)
+            if len(signal) < len(groups[key]["canonical"]):
+                groups[key]["canonical"] = signal
+        else:
+            groups[key] = {"canonical": signal, "count": count}
+
+    # Pass 2: Substring absorption — shorter subsumes longer
+    keys = sorted(groups.keys(), key=len)
+    absorbed: set[str] = set()
+    for i, shorter in enumerate(keys):
+        if shorter in absorbed:
+            continue
+        for longer in keys[i + 1:]:
+            if longer in absorbed:
+                continue
+            if shorter in longer:
+                groups[shorter]["count"] += groups[longer]["count"]
+                absorbed.add(longer)
+    for key in absorbed:
+        del groups[key]
+
+    # Pass 3: Fuzzy similarity merge
+    remaining = list(groups.keys())
+    merged_into: dict[str, str] = {}  # key -> target_key
+    for i in range(len(remaining)):
+        if remaining[i] in merged_into:
+            continue
+        for j in range(i + 1, len(remaining)):
+            if remaining[j] in merged_into:
+                continue
+            ratio = SequenceMatcher(None, remaining[i], remaining[j]).ratio()
+            if ratio >= similarity_threshold:
+                merged_into[remaining[j]] = remaining[i]
+
+    for src, dst in merged_into.items():
+        while dst in merged_into:
+            dst = merged_into[dst]
+        groups[dst]["count"] += groups[src]["count"]
+        if len(groups[src]["canonical"]) < len(groups[dst]["canonical"]):
+            groups[dst]["canonical"] = groups[src]["canonical"]
+        del groups[src]
+
+    return {info["canonical"]: info["count"] for info in groups.values()}
+
+
+def _merge_tools(raw_tools: dict[str, int]) -> dict[str, int]:
+    """Merge tool name variants by case-insensitive normalization."""
+    groups: dict[str, dict] = {}  # lowered -> {canonical, count}
+    for tool, count in raw_tools.items():
+        key = tool.strip().lower()
+        if key in groups:
+            groups[key]["count"] += count
+            # Keep the form with higher count as canonical
+            if count > groups[key]["best_count"]:
+                groups[key]["canonical"] = tool
+                groups[key]["best_count"] = count
+        else:
+            groups[key] = {"canonical": tool, "count": count, "best_count": count}
+    return {info["canonical"]: info["count"] for info in groups.values()}
 
 
 # ── Data Assembly ────────────────────────────────────────────────────────
@@ -238,8 +326,10 @@ def _assemble_cross_references(conn, min_count: int = 2) -> dict[str, list[dict]
 def _serialize_technique(slug: str, data: dict,
                          sub_data: dict | None = None) -> dict:
     """Convert an internal data bucket to a JSON-serializable dict."""
-    top_signals = sorted(data["recognition"].items(), key=lambda x: -x[1])[:10]
-    top_tools = sorted(data["tools"].items(), key=lambda x: -x[1])[:15]
+    merged_recognition = _merge_signals(dict(data["recognition"]))
+    top_signals = sorted(merged_recognition.items(), key=lambda x: -x[1])[:10]
+    merged_tools = _merge_tools(dict(data["tools"]))
+    top_tools = sorted(merged_tools.items(), key=lambda x: -x[1])[:15]
     top_diff = (max(data["difficulties"].items(), key=lambda x: x[1])[0]
                 if data["difficulties"] else "medium")
     merged_steps = _merge_solve_steps(data["steps"])

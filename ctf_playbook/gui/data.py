@@ -7,17 +7,21 @@ from ctf_playbook.config import DB_PATH
 from ctf_playbook.db import get_connection, search_writeups, get_stats
 from ctf_playbook.services.builder import PLAYBOOK_JSON_PATH
 
+from ctf_playbook.services.matcher import ChallengeMatcher
+
 _playbook: dict | None = None
+_matcher: ChallengeMatcher | None = None
 
 
 def load_playbook(path: Path | None = None) -> dict:
     """Load playbook.json into memory. Caches on first call."""
-    global _playbook
+    global _playbook, _matcher
     p = path or PLAYBOOK_JSON_PATH
     if not p.exists():
         return {}
     with open(p, encoding="utf-8") as f:
         _playbook = json.load(f)
+    _matcher = None  # reset so it rebuilds from new data
     return _playbook
 
 
@@ -54,6 +58,16 @@ def get_techniques_by_category() -> dict[str, list[dict]]:
     for cat in grouped:
         grouped[cat].sort(key=lambda t: t["slug"])
     return dict(sorted(grouped.items()))
+
+
+def get_matcher() -> ChallengeMatcher | None:
+    """Return the cached matcher, building from playbook if needed."""
+    global _matcher
+    if _matcher is None:
+        pb = get_playbook()
+        if pb and pb.get("techniques"):
+            _matcher = ChallengeMatcher(pb)
+    return _matcher
 
 
 def search_db(query: str | None = None, technique: str | None = None,

@@ -154,6 +154,16 @@ async def recon_patterns(request: Request):
     })
 
 
+@router.get("/identify", response_class=HTMLResponse)
+async def identify_page(request: Request):
+    """Challenge identification page."""
+    tree = get_techniques_by_category()
+    return TEMPLATES.TemplateResponse(request, "identify.html", {
+        "tree": tree,
+        "page_title": "Identify",
+    })
+
+
 @router.get("/tools", response_class=HTMLResponse)
 async def tools_page(request: Request):
     """Tool reference page."""

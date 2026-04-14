@@ -37,6 +37,14 @@ FETCH_DELAY = 0.5  # seconds between requests to the same domain
 FETCH_TIMEOUT = 10  # seconds
 FETCH_MAX_SIZE = 5_000_000  # 5 MB max per page
 
+# ── Reddit ─────────────────────────────────────────────────────────────
+REDDIT_DELAY = 2.0  # seconds between requests
+REDDIT_SUBREDDITS = ["securityCTF", "netsec", "CTF"]
+REDDIT_MIN_SCORE = 2  # filter low-quality posts
+
+# ── Blog RSS ───────────────────────────────────────────────────────────
+BLOG_DELAY = 1.0  # seconds between feed fetches
+
 # ── Classification (Gemini) ────────────────────────────────────────────────
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMINI_MODEL = "gemini-3.1-flash-lite-preview"

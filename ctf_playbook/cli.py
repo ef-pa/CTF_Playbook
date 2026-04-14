@@ -34,10 +34,12 @@ def cli():
 @cli.command()
 @click.option("--max-events", default=200, help="Max events to scrape from CTFtime")
 @click.option("--max-repos", default=50, help="Max repos to scan from GitHub")
-@click.option("--source", type=click.Choice(["all", "ctftime", "github"]), default="all",
-              help="Which source to scrape")
-def scrape(max_events, max_repos, source):
-    """Stage 1: Discover writeups from CTFtime and GitHub."""
+@click.option("--max-posts", default=500, help="Max posts to scrape from Reddit")
+@click.option("--source",
+              type=click.Choice(["all", "ctftime", "github", "reddit", "blogs"]),
+              default="all", help="Which source to scrape")
+def scrape(max_events, max_repos, max_posts, source):
+    """Stage 1: Discover writeups from CTFtime, GitHub, Reddit, and blogs."""
     if source in ("all", "ctftime"):
         from ctf_playbook.scrapers.ctftime import run as run_ctftime
         run_ctftime(max_events=max_events)
@@ -45,6 +47,14 @@ def scrape(max_events, max_repos, source):
     if source in ("all", "github"):
         from ctf_playbook.scrapers.github import run as run_github
         run_github(max_repos=max_repos)
+
+    if source in ("all", "reddit"):
+        from ctf_playbook.scrapers.reddit import run as run_reddit
+        run_reddit(max_posts=max_posts)
+
+    if source in ("all", "blogs"):
+        from ctf_playbook.scrapers.blogs import run as run_blogs
+        run_blogs()
 
 
 @cli.command()
@@ -85,6 +95,77 @@ def build():
     """Stage 4: Generate the playbook (JSON data + markdown files)."""
     from ctf_playbook.services.builder import run as run_builder
     run_builder()
+
+
+@cli.command()
+@click.argument("text", required=False)
+@click.option("--file", "-f", "input_file", type=click.Path(exists=True),
+              help="Read challenge description from a file")
+@click.option("--limit", "-n", default=10, help="Max results to show")
+def identify(text, input_file, limit):
+    """Identify techniques from a challenge description.
+
+    Paste a challenge description or key observations, and the system
+    will match against known recognition signals to suggest likely techniques.
+    """
+    from pathlib import Path
+    from rich.panel import Panel
+    from ctf_playbook.services.matcher import identify_from_playbook
+
+    # Resolve input from argument, file, or stdin
+    if text:
+        query = text
+    elif input_file:
+        query = Path(input_file).read_text(encoding="utf-8").strip()
+    elif not sys.stdin.isatty():
+        query = sys.stdin.read().strip()
+    else:
+        console.print("[yellow]Provide challenge text as argument, --file, or via stdin[/]")
+        console.print("  ctf-playbook identify \"RSA with small public exponent\"")
+        console.print("  ctf-playbook identify -f challenge.txt")
+        console.print("  echo \"pcap with DNS\" | ctf-playbook identify")
+        return
+
+    if not query:
+        console.print("[yellow]Empty input[/]")
+        return
+
+    results = identify_from_playbook(query, max_results=limit)
+    if not results:
+        console.print("[yellow]No matches found.[/] Is the playbook built? (ctf-playbook build)")
+        return
+
+    console.print(f"\n[bold]Challenge Matcher[/] — {len(results)} match{'es' if len(results) != 1 else ''}\n")
+
+    for i, m in enumerate(results, 1):
+        header = f"#{i}  {m.technique}"
+        if m.sub_technique:
+            header += f" / {m.sub_technique}"
+        header += f"  ({m.category})"
+
+        lines = [f"[bold]Confidence:[/] {m.confidence:.0f}%"]
+
+        if m.matched_signals:
+            lines.append("")
+            lines.append("[bold]Matched signals:[/]")
+            for sig in m.matched_signals:
+                marker = "*" if sig["match_type"] == "phrase" else "-"
+                lines.append(f"  {marker} {sig['signal']} (seen {sig['count']}x)")
+
+        if m.tools:
+            lines.append("")
+            lines.append(f"[bold]Tools:[/] {', '.join(m.tools)}")
+
+        if m.solve_steps:
+            lines.append("")
+            lines.append("[bold]Solve flow:[/]")
+            for j, step in enumerate(m.solve_steps[:5], 1):
+                lines.append(f"  {j}. {step}")
+
+        lines.append("")
+        lines.append(f"[dim]{m.example_count} writeups • {m.difficulty}[/]")
+
+        console.print(Panel("\n".join(lines), title=header, border_style="cyan"))
 
 
 @cli.command()
@@ -560,8 +641,12 @@ def run_all(max_events, max_repos, fetch_limit, classify_limit):
     from ctf_playbook.scrapers.ctftime import run as run_ctftime
     from ctf_playbook.scrapers.github import run as run_github
     from ctf_playbook.scrapers.github import EXCLUDED_REPOS
+    from ctf_playbook.scrapers.reddit import run as run_reddit
+    from ctf_playbook.scrapers.blogs import run as run_blogs
     run_ctftime(max_events=max_events)
     run_github(max_repos=max_repos)
+    run_reddit()
+    run_blogs()
 
     console.print("\n[bold]Stage 2/5:[/] Fetching content...")
     from ctf_playbook.services.fetcher import run as run_fetcher

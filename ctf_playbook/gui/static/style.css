@@ -511,3 +511,44 @@ details.recon-technique > summary a { color: var(--accent); }
     .sub-tech-grid { grid-template-columns: 1fr; }
     .dashboard-grid { grid-template-columns: 1fr; }
 }
+
+/* ── Identify Page ────────────────────────────────────────────── */
+.identify-textarea {
+    width: 100%;
+    min-height: 120px;
+    padding: 0.75rem;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text);
+    font-family: inherit;
+    font-size: 0.95rem;
+    line-height: 1.5;
+    resize: vertical;
+}
+.identify-textarea:focus { border-color: var(--accent); outline: none; }
+.identify-actions { display: flex; gap: 0.5rem; margin-top: 0.75rem; }
+.btn {
+    padding: 0.5rem 1.25rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--bg-card);
+    color: var(--text);
+    cursor: pointer;
+    font-size: 0.9rem;
+}
+.btn:hover { background: var(--bg-hover); }
+.btn.primary { background: var(--accent); color: var(--bg); border-color: var(--accent); font-weight: 600; }
+.btn.primary:hover { background: var(--accent-hover); }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.match-card { margin-top: 1rem; }
+.match-header { display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 0.75rem; }
+.match-header h3 { margin: 0; }
+.match-header h3 a { color: var(--accent); text-decoration: none; }
+.match-header h3 a:hover { text-decoration: underline; }
+
+.confidence-row { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.75rem; }
+.confidence-label { font-weight: 600; min-width: 3rem; }
+.confidence-track { flex: 1; height: 8px; background: var(--border); border-radius: 4px; overflow: hidden; }
+.confidence-bar { height: 100%; background: var(--accent); border-radius: 4px; transition: width 0.3s; }

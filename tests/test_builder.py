@@ -4,7 +4,8 @@ import json
 from collections import defaultdict
 
 from ctf_playbook.services.builder import (
-    _merge_solve_steps, _serialize_technique, _assemble_recon_patterns,
+    _merge_solve_steps, _normalize_signal, _merge_signals, _merge_tools,
+    _serialize_technique, _assemble_recon_patterns,
     _assemble_tool_reference, _assemble_cross_references,
     _render_pattern_content, _render_recon_trees, TECHNIQUES_DIR,
 )
@@ -537,3 +538,118 @@ class TestRenderReconTrees:
             encoding="utf-8"
         )
         assert "no distinguishing signals yet" in content
+
+
+# ── _normalize_signal ──────────────────────────────────────────────────
+
+
+class TestNormalizeSignal:
+    def test_lowercase(self):
+        assert _normalize_signal("RSA With Unusual Parameters") == "rsa with unusual parameters"
+
+    def test_strip_whitespace(self):
+        assert _normalize_signal("  some signal  ") == "some signal"
+
+    def test_strip_trailing_punctuation(self):
+        assert _normalize_signal("signal with period.") == "signal with period"
+        assert _normalize_signal("signal;") == "signal"
+
+    def test_collapse_internal_whitespace(self):
+        assert _normalize_signal("multiple   spaces   here") == "multiple spaces here"
+
+    def test_empty_string(self):
+        assert _normalize_signal("") == ""
+        assert _normalize_signal("   ") == ""
+
+
+# ── _merge_signals ─────────────────────────────────────────────────────
+
+
+class TestMergeSignals:
+    def test_case_insensitive_merge(self):
+        raw = {"RSA with unusual parameters": 1, "rsa with unusual parameters": 1}
+        result = _merge_signals(raw)
+        assert len(result) == 1
+        assert sum(result.values()) == 2
+
+    def test_whitespace_and_punctuation_merge(self):
+        raw = {"input reflected in page.": 1, "  input reflected in page  ": 1}
+        result = _merge_signals(raw)
+        assert len(result) == 1
+        assert sum(result.values()) == 2
+
+    def test_substring_absorption(self):
+        raw = {"APK file": 1, "APK file provided": 1, "Android APK file format": 1}
+        result = _merge_signals(raw)
+        assert len(result) == 1
+        assert sum(result.values()) == 3
+
+    def test_fuzzy_merge(self):
+        raw = {
+            "user input passed directly to printf()": 1,
+            "user input passed directly to printf": 1,
+        }
+        result = _merge_signals(raw)
+        assert len(result) == 1
+        assert sum(result.values()) == 2
+
+    def test_no_false_fuzzy_merge(self):
+        raw = {
+            "cryptographic algorithm with unknown parameters": 1,
+            "cryptographic algorithm with reversible operations": 1,
+        }
+        result = _merge_signals(raw)
+        assert len(result) == 2
+
+    def test_canonical_prefers_shorter(self):
+        raw = {
+            "APK file provided for analysis": 2,
+            "APK file": 1,
+        }
+        result = _merge_signals(raw)
+        assert "APK file" in result
+
+    def test_empty_signals(self):
+        assert _merge_signals({}) == {}
+
+    def test_single_signal(self):
+        raw = {"only one signal": 5}
+        result = _merge_signals(raw)
+        assert result == {"only one signal": 5}
+
+    def test_combined_counts(self):
+        raw = {
+            "RSA challenge": 3,
+            "rsa challenge.": 2,
+            "An RSA challenge problem": 1,
+        }
+        result = _merge_signals(raw)
+        assert len(result) == 1
+        assert sum(result.values()) == 6
+
+
+# ── _merge_tools ───────────────────────────────────────────────────────
+
+
+class TestMergeTools:
+    def test_case_merge(self):
+        raw = {"wireshark": 3, "Wireshark": 5}
+        result = _merge_tools(raw)
+        assert len(result) == 1
+        assert sum(result.values()) == 8
+        # Should keep "Wireshark" (higher count) as canonical
+        assert "Wireshark" in result
+
+    def test_no_false_merge(self):
+        raw = {"gdb": 5, "pwndbg": 3}
+        result = _merge_tools(raw)
+        assert len(result) == 2
+
+    def test_empty(self):
+        assert _merge_tools({}) == {}
+
+    def test_whitespace_normalization(self):
+        raw = {"  gdb ": 2, "gdb": 3}
+        result = _merge_tools(raw)
+        assert len(result) == 1
+        assert sum(result.values()) == 5

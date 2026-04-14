@@ -1,9 +1,10 @@
 """JSON API routes for client-side interactivity."""
 
 from fastapi import APIRouter
+from pydantic import BaseModel
 
 from ctf_playbook.gui.data import (
-    get_playbook, get_technique, search_db, get_db_stats,
+    get_playbook, get_technique, search_db, get_db_stats, get_matcher,
 )
 
 router = APIRouter()
@@ -55,3 +56,33 @@ async def api_search(q: str = "", technique: str = "",
         limit=min(limit, 100),
     )
     return {"results": results, "count": len(results)}
+
+
+class IdentifyRequest(BaseModel):
+    text: str
+    max_results: int = 10
+
+
+@router.post("/identify")
+async def api_identify(body: IdentifyRequest):
+    """Match challenge text against recognition signals."""
+    matcher = get_matcher()
+    if not matcher:
+        return {"matches": [], "error": "No playbook data loaded"}
+    results = matcher.identify(body.text, max_results=body.max_results)
+    return {
+        "matches": [
+            {
+                "technique": m.technique,
+                "sub_technique": m.sub_technique,
+                "category": m.category,
+                "confidence": m.confidence,
+                "matched_signals": m.matched_signals,
+                "difficulty": m.difficulty,
+                "tools": m.tools,
+                "solve_steps": m.solve_steps,
+                "example_count": m.example_count,
+            }
+            for m in results
+        ],
+    }
