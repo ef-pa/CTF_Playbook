@@ -105,6 +105,7 @@ class RedditScraper(BaseScraper):
     def scrape(self, conn, max_posts: int = 500,
                **kwargs) -> Iterator[WriteupItem]:
         for sub in REDDIT_SUBREDDITS:
+            self.console.print(f"  Searching [cyan]r/{sub}[/]...")
             yield from self._search_subreddit(sub, max_posts)
 
 

@@ -237,12 +237,17 @@ class GitHubScraper(BaseScraper):
 
         with Progress(SpinnerColumn(), TextColumn("{task.description}"),
                       BarColumn(), console=self.console) as progress:
-            task = progress.add_task("Indexing repos...", total=len(repos))
-            for repo in repos:
+            task = progress.add_task(
+                f"Indexing: 0/{len(repos)} repos (0 writeups)", total=len(repos)
+            )
+            for i, repo in enumerate(repos, 1):
+                progress.update(
+                    task,
+                    description=f"Indexing: {i}/{len(repos)} — {repo['full_name']} ({total} writeups)",
+                )
                 n = self._index_repo(repo, conn)
                 total += n
-                progress.update(task, advance=1,
-                                description=f"Indexing... ({total} writeups found)")
+                progress.advance(task)
 
         stats = get_stats(conn)
         self.console.print(f"Database totals: {stats}")

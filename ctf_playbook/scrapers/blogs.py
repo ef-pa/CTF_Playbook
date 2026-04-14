@@ -95,7 +95,10 @@ class BlogScraper(BaseScraper):
     def scrape(self, conn, max_feeds: int | None = None,
                **kwargs) -> Iterator[WriteupItem]:
         feeds = CURATED_FEEDS[:max_feeds] if max_feeds else CURATED_FEEDS
-        for feed in feeds:
+        for i, feed in enumerate(feeds, 1):
+            self.console.print(
+                f"  Fetching feed [cyan]{feed['name']}[/] ({i}/{len(feeds)})..."
+            )
             resp = self.fetch(feed["url"])
             if not resp:
                 continue

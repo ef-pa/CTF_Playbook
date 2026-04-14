@@ -32,7 +32,8 @@ async def index(request: Request):
     diff_counts: Counter = Counter()
     for tech in techniques.values():
         cat_counts[tech.get("category", "misc")] += 1
-        diff_counts[tech.get("difficulty", "unknown")] += 1
+        for ex in tech.get("examples", []):
+            diff_counts[ex.get("difficulty", "unknown")] += 1
 
     tree = get_techniques_by_category()
 

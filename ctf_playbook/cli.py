@@ -68,7 +68,7 @@ def fetch(limit):
 @cli.command()
 @click.option("--limit", default=100, help="Max writeups to classify")
 @click.option("--category", default=None, help="Only classify this CTF category")
-@click.option("--workers", "-w", default=10, help="Concurrent API workers (1=sequential)")
+@click.option("--workers", "-w", default=1, help="Concurrent API workers (1=sequential)")
 def classify(limit, category, workers):
     """Stage 3: Classify writeups using LLM analysis."""
     from ctf_playbook.scrapers.github import EXCLUDED_REPOS

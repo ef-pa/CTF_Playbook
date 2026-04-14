@@ -39,7 +39,9 @@ class CTFtimeScraper(BaseScraper):
 
         with Progress(SpinnerColumn(), TextColumn("{task.description}"),
                       BarColumn(), console=self.console) as progress:
-            task = progress.add_task("Discovering events...", total=max_events)
+            task = progress.add_task(
+                f"Discovering events: 0/{max_events}", total=max_events
+            )
 
             while len(event_ids) < max_events:
                 url = f"{CTFTIME_BASE}/event/list/past?page={page}"
@@ -55,7 +57,10 @@ class CTFtimeScraper(BaseScraper):
                     eid = int(link["href"].split("/")[-1])
                     if eid not in event_ids:
                         event_ids.append(eid)
-                        progress.update(task, completed=len(event_ids))
+                        progress.update(
+                            task, completed=len(event_ids),
+                            description=f"Discovering events: {len(event_ids)}/{max_events}",
+                        )
                         if len(event_ids) >= max_events:
                             break
 
@@ -164,9 +169,15 @@ class CTFtimeScraper(BaseScraper):
 
         with Progress(SpinnerColumn(), TextColumn("{task.description}"),
                       console=self.console) as progress:
-            task = progress.add_task("Scraping writeup listing pages...", total=max_pages)
+            task = progress.add_task(
+                f"Writeup listings: page 1/{max_pages} (0 found)", total=max_pages
+            )
 
             for page in range(1, max_pages + 1):
+                progress.update(
+                    task, completed=page,
+                    description=f"Writeup listings: page {page}/{max_pages} ({total} found)",
+                )
                 url = f"{CTFTIME_BASE}/writeups?page={page}&hidden=0"
                 soup = self._get_soup(url)
                 if not soup:
@@ -218,8 +229,6 @@ class CTFtimeScraper(BaseScraper):
                         if insert_writeup(conn, db_challenge_id, "ctftime", writeup_url):
                             total += 1
 
-                progress.update(task, completed=page)
-
         self.console.print(f"Found [green]{total}[/] writeups from listing pages")
         return total
 
@@ -244,14 +253,19 @@ class CTFtimeScraper(BaseScraper):
 
         with Progress(SpinnerColumn(), TextColumn("{task.description}"),
                       BarColumn(), console=self.console) as progress:
-            task = progress.add_task("Scraping events...", total=len(event_ids))
+            task = progress.add_task(
+                f"Events: 0/{len(event_ids)} (0 writeups)", total=len(event_ids)
+            )
 
-            for eid in event_ids:
+            for i, eid in enumerate(event_ids, 1):
+                progress.update(
+                    task,
+                    description=f"Events: {i}/{len(event_ids)} — event/{eid} ({total_writeups} writeups)",
+                )
                 result = self._scrape_event(eid, conn)
                 total_challenges += result["challenges"]
                 total_writeups += result["writeups"]
-                progress.update(task, advance=1,
-                                description=f"Events... ({total_writeups} writeups found)")
+                progress.advance(task)
 
         stats = get_stats(conn)
         self.console.print(f"Database totals: {stats}")
