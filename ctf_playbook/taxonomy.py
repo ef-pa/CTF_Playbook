@@ -128,6 +128,9 @@ TAXONOMY = {
             "header-injection": {
                 "description": "Injecting malicious HTTP headers",
             },
+            "csrf-attack": {
+                "description": "Cross-site request forgery attacks",
+            },
         },
     },
     "cryptography": {
@@ -307,17 +310,18 @@ TAXONOMY = {
 _KEYWORD_SUPPLEMENTS = {
     "web": {"css", "php", "javascript", "dom", "http", "http2", "http3",
             "html", "url", "cookie", "session", "oauth", "cors",
-            "download", "client", "source", "endpoint", "servlet", "cgi"},
+            "download", "client", "source", "endpoint", "servlet", "cgi",
+            "csrf", "push", "server"},
     "cryptography": {"ecdsa", "nonce", "aes", "encrypt", "decrypt",
                      "prime", "modular", "signature", "cipher", "xor",
                      "polynomial", "crypto", "cryptographic", "commitment",
                      "substitution", "chaffing", "winnowing", "knowledge",
-                     "forgery", "shor", "brute"},
+                     "forgery", "shor", "brute",
+                     "dsa", "signing", "logarithm", "discrete"},
     "binary-exploitation": {"libc", "plt", "aslr", "pie", "syscall",
                             "dll", "cet", "ret2", "gadget", "elf"},
     "reverse-engineering": {"decompile", "disassemble", "bytecode",
-                            "unpacking", "reversal", "ida", "apk", "dex",
-                            "multi"},
+                            "unpacking", "ida", "apk", "dex", "multi"},
     "forensics": {"pcap", "exif", "volatility", "wireshark", "stego",
                   "usb", "hid", "keylogger", "audio", "comparison"},
 }

@@ -6,6 +6,7 @@ from collections import defaultdict
 from ctf_playbook.services.builder import (
     _merge_solve_steps, _dedup_step_strings,
     _normalize_signal, _merge_signals, _merge_tools,
+    _tokenize_for_scoring, _build_context_keywords,
     _serialize_technique, _assemble_recon_patterns,
     _assemble_tool_reference, _assemble_cross_references,
     _render_pattern_content, _render_recon_trees, TECHNIQUES_DIR,
@@ -113,6 +114,93 @@ class TestMergeSolveSteps:
         # "analyze the binary" appears in both — consensus
         # "run the exploit" and "patch the binary" are distinct
         assert any("analyze" in s for s in steps)
+
+
+# ── Context-aware fallback scoring ──────────────────────────────────────
+
+
+class TestTokenizeForScoring:
+    def test_basic(self):
+        result = _tokenize_for_scoring("RSA with small exponent")
+        assert "rsa" in result
+        assert "small" in result
+        assert "exponent" in result
+        assert "with" not in result  # stopword
+
+    def test_tool_notation(self):
+        result = _tokenize_for_scoring("printf() format string")
+        assert "printf()" in result
+        assert "format" in result
+        assert "string" in result
+
+    def test_empty(self):
+        assert _tokenize_for_scoring("") == set()
+
+
+class TestBuildContextKeywords:
+    def test_combines_signals_and_tools(self):
+        recognition = {"small public exponent": 3, "RSA modulus": 2}
+        tools = {"sage": 5, "pycryptodome": 3}
+        result = _build_context_keywords(recognition, tools)
+        assert "rsa" in result
+        assert "modulus" in result
+        assert "exponent" in result
+        assert "sage" in result
+        assert "pycryptodome" in result
+
+    def test_empty(self):
+        assert _build_context_keywords({}, {}) == set()
+
+
+class TestFallbackScoring:
+    def test_prefers_relevant_steps(self):
+        """Shorter list with relevant keywords should beat longer irrelevant list."""
+        data = [
+            # Long but irrelevant (git/forensics steps for an RSA technique)
+            ["extract git objects from archive", "decompress zlib data",
+             "reconstruct repository history", "find hidden files",
+             "decode base64 encoded data", "identify the modulus",
+             "perform integer factorization"],
+            # Short but relevant to RSA
+            ["identify weak RSA parameters", "factor the modulus",
+             "compute private key", "decrypt the ciphertext"],
+        ]
+        context = {"rsa", "modulus", "factor", "exponent", "prime",
+                   "decrypt", "sage", "pycryptodome"}
+        steps, is_consensus = _merge_solve_steps(data, context_keywords=context)
+        assert is_consensus is False
+        # Should pick the RSA-relevant list, not the longer git list
+        assert any("rsa" in s.lower() for s in steps)
+        assert not any("git" in s.lower() for s in steps)
+
+    def test_falls_back_to_longest_without_context(self):
+        """Without context_keywords, longest list wins (backward compat)."""
+        data = [
+            ["short step"],
+            ["longer step one", "longer step two", "longer step three"],
+        ]
+        steps, _ = _merge_solve_steps(data)
+        assert len(steps) == 3
+
+    def test_falls_back_to_longest_when_all_score_zero(self):
+        """When no step list overlaps with context, pick longest."""
+        data = [
+            ["alpha procedure"],
+            ["beta procedure one", "beta procedure two", "beta procedure three"],
+        ]
+        context = {"completely", "unrelated", "keywords"}
+        steps, _ = _merge_solve_steps(data, context_keywords=context)
+        assert len(steps) == 3  # longest list
+
+    def test_tiebreak_prefers_longer(self):
+        """Equal keyword scores should tie-break on list length."""
+        data = [
+            ["exploit the buffer overflow"],
+            ["exploit the buffer overflow", "escalate privileges"],
+        ]
+        context = {"buffer", "overflow", "exploit"}
+        steps, _ = _merge_solve_steps(data, context_keywords=context)
+        assert len(steps) == 2  # longer list wins the tie
 
 
 # ── _dedup_step_strings ─────────────────────────────────────────────────

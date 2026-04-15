@@ -166,13 +166,19 @@ def _dedup_consensus_steps(steps: list[str],
 
 
 def _merge_solve_steps(step_lists: list[list[str]],
-                       max_steps: int = 7) -> tuple[list[str], bool]:
+                       max_steps: int = 7,
+                       context_keywords: set[str] | None = None,
+                       ) -> tuple[list[str], bool]:
     """Merge multiple solve step lists into a generalized flow.
 
     First deduplicates near-identical steps (substring, fuzzy matching),
     then uses frequency and positional analysis: steps that appear across
     multiple writeups are preferred, ordered by their average position.
-    Falls back to the longest individual list when consensus is insufficient.
+
+    When consensus is insufficient, falls back to the writeup whose steps
+    have the most keyword overlap with ``context_keywords`` (derived from
+    the technique's recognition signals and tools). If no context is
+    provided or all lists score zero, falls back to the longest list.
 
     Returns (steps, is_consensus) where is_consensus indicates whether the
     steps came from cross-writeup agreement or a single-writeup fallback.
@@ -208,7 +214,20 @@ def _merge_solve_steps(step_lists: list[list[str]],
         steps = [s["original"] for s in consensus[:max_steps]]
         return (_dedup_consensus_steps(steps), True)
 
-    # Not enough consensus — fall back to longest individual list
+    # Not enough consensus — fall back to most relevant individual list
+    if context_keywords:
+        def _score(steps: list[str]) -> int:
+            kws: set[str] = set()
+            for s in steps:
+                kws |= _tokenize_for_scoring(s)
+            return len(kws & context_keywords)
+
+        scored = [(i, _score(lst), len(lst)) for i, lst in enumerate(canon_lists)]
+        scored.sort(key=lambda x: (x[1], x[2]), reverse=True)
+        if scored[0][1] > 0:
+            return (canon_lists[scored[0][0]][:max_steps], False)
+
+    # No context or all scored 0 — fall back to longest list
     longest = max(canon_lists, key=len)
     return (longest[:max_steps], False)
 
@@ -219,6 +238,34 @@ def _normalize_signal(signal: str) -> str:
     s = s.rstrip(".,;:!?")
     s = re.sub(r"\s+", " ", s)
     return s
+
+
+_STEP_TOKEN_RE = re.compile(r"[a-z0-9_]+(?:\(\))?")
+_STEP_STOPWORDS = frozenset({
+    "a", "an", "the", "is", "are", "was", "were", "in", "on", "at", "to",
+    "for", "of", "with", "by", "from", "as", "or", "and", "it", "be",
+    "that", "this", "which", "not", "but", "has", "have", "do", "does",
+    "can", "will", "been", "being", "into", "than", "its", "you", "your",
+    "use", "using", "find", "check", "look", "step", "run", "get", "set",
+})
+
+
+def _tokenize_for_scoring(text: str) -> set[str]:
+    """Extract lowercase keyword tokens from text, filtering stopwords."""
+    tokens = _STEP_TOKEN_RE.findall(text.lower())
+    return {t for t in tokens if t not in _STEP_STOPWORDS}
+
+
+def _build_context_keywords(
+    recognition: dict[str, int], tools: dict[str, int],
+) -> set[str]:
+    """Build a keyword set from a technique's recognition signals and tools."""
+    keywords: set[str] = set()
+    for signal in recognition:
+        keywords |= _tokenize_for_scoring(signal)
+    for tool in tools:
+        keywords |= _tokenize_for_scoring(tool)
+    return keywords
 
 
 def _merge_signals(raw_signals: dict[str, int],
@@ -456,7 +503,9 @@ def _serialize_technique(slug: str, data: dict,
     top_tools = sorted(merged_tools.items(), key=lambda x: -x[1])[:15]
     top_diff = (max(data["difficulties"].items(), key=lambda x: x[1])[0]
                 if data["difficulties"] else "medium")
-    merged_steps, is_consensus = _merge_solve_steps(data["steps"])
+    context_kw = _build_context_keywords(dict(data["recognition"]), dict(data["tools"]))
+    merged_steps, is_consensus = _merge_solve_steps(
+        data["steps"], context_keywords=context_kw)
 
     result = {
         "difficulty": top_diff,
