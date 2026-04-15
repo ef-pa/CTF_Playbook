@@ -1,5 +1,8 @@
 """Orchestrate writeup classification: DB queries, concurrency, progress UI."""
 
+import os
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -16,6 +19,9 @@ from ctf_playbook.db import (
 from ctf_playbook.services.classifier import classify_writeup, TransientAPIError
 
 console = Console()
+
+# Shared cancellation flag — workers check this to bail out early
+_shutdown_event = threading.Event()
 
 
 def _prepare_row(row) -> tuple[int, str, str, str, str | None]:
@@ -44,15 +50,31 @@ def _prepare_row(row) -> tuple[int, str, str, str, str | None]:
 
 
 def _classify_worker(content: str, challenge_name: str,
-                     category: str) -> ClassificationResult | None | TransientAPIError:
+                     category: str,
+                     max_retries: int = 3,
+                     ) -> ClassificationResult | None | TransientAPIError:
     """Worker function for concurrent classification.
 
-    Returns the result, None for permanent failure, or a TransientAPIError.
+    Retries transient errors (429, 503) with exponential backoff.
+    Returns the result, None for permanent failure, or a TransientAPIError
+    if all retries are exhausted.
     """
-    try:
-        return classify_writeup(content, challenge_name, category)
-    except TransientAPIError as e:
-        return e
+    for attempt in range(max_retries + 1):
+        if _shutdown_event.is_set():
+            return TransientAPIError("cancelled")
+        try:
+            return classify_writeup(content, challenge_name, category)
+        except TransientAPIError as e:
+            if attempt == max_retries:
+                return e
+            delay = e.retry_after or (2 ** attempt * 5)
+            console.print(
+                f"  [yellow]API error:[/] {e} — retrying in {delay:.0f}s "
+                f"(attempt {attempt + 1}/{max_retries})"
+            )
+            # Use event.wait() instead of time.sleep() so we can be interrupted
+            if _shutdown_event.wait(timeout=delay):
+                return TransientAPIError("cancelled")
 
 
 def run(limit: int = 100, category: str = None, workers: int = 1):
@@ -66,6 +88,8 @@ def run(limit: int = 100, category: str = None, workers: int = 1):
     n_keys = len(GEMINI_API_KEYS)
     total_rpm = n_keys * GEMINI_RPM
     console.print(f"Using [cyan]{n_keys}[/] API key{'s' if n_keys > 1 else ''} ({total_rpm} RPM)")
+
+    _shutdown_event.clear()
 
     with db_session() as conn:
         unclassified = get_unclassified(conn, limit=limit, category=category)
@@ -114,7 +138,8 @@ def run(limit: int = 100, category: str = None, workers: int = 1):
                 if isinstance(outcome, TransientAPIError):
                     consecutive_transient += 1
                     skipped += 1
-                    console.print(f"  [yellow]API error:[/] {outcome}")
+                    if str(outcome) != "cancelled":
+                        console.print(f"  [yellow]API error:[/] {outcome}")
                     if consecutive_transient >= max_consecutive_transient:
                         console.print(
                             f"\n[red]Stopping:[/] {consecutive_transient} "
@@ -171,14 +196,22 @@ def run(limit: int = 100, category: str = None, workers: int = 1):
 
             if workers <= 1:
                 # Sequential mode
-                for wid, content, cname, cat in ready:
-                    if stop:
-                        break
-                    outcome = _classify_worker(content, cname, cat)
-                    _handle_result(wid, cname, outcome)
+                try:
+                    for wid, content, cname, cat in ready:
+                        if stop:
+                            break
+                        outcome = _classify_worker(content, cname, cat)
+                        _handle_result(wid, cname, outcome)
+                except KeyboardInterrupt:
+                    console.print("\n[yellow]Interrupted[/]")
             else:
                 # Concurrent mode
-                with ThreadPoolExecutor(max_workers=workers) as executor:
+                executor = ThreadPoolExecutor(
+                    max_workers=workers,
+                    thread_name_prefix="classifier",
+                )
+                interrupted = False
+                try:
                     future_map = {}
                     for wid, content, cname, cat in ready:
                         f = executor.submit(_classify_worker, content, cname, cat)
@@ -186,12 +219,25 @@ def run(limit: int = 100, category: str = None, workers: int = 1):
 
                     for future in as_completed(future_map):
                         if stop:
-                            for f in future_map:
-                                f.cancel()
                             break
                         wid, cname = future_map[future]
                         outcome = future.result()
                         _handle_result(wid, cname, outcome)
+                except KeyboardInterrupt:
+                    interrupted = True
+                    console.print("\n[yellow]Interrupted — shutting down...[/]")
+                    _shutdown_event.set()
+                finally:
+                    executor.shutdown(wait=False, cancel_futures=True)
+                    if interrupted:
+                        # Commit work done so far before force-exiting.
+                        # os._exit skips Python's thread-join shutdown
+                        # which would otherwise hang on blocked API threads.
+                        conn.commit()
+                        console.print(
+                            f"[green]Saved progress:[/] {success} classified"
+                        )
+                        os._exit(130)
 
         parts = [f"Classified {success}"]
         if failed:
