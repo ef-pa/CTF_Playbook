@@ -213,7 +213,7 @@ class TestInferCategoryFromSlug:
         assert infer_category_from_slug("cet-bypass") == "binary-exploitation"
 
     def test_reverse_engineering_techniques(self):
-        assert infer_category_from_slug("algorithm-reversal") == "reverse-engineering"
+        assert infer_category_from_slug("bytecode-decompile") == "reverse-engineering"
         assert infer_category_from_slug("multi-stage-unpacking") == "reverse-engineering"
 
     def test_forensics_techniques(self):

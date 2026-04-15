@@ -123,6 +123,12 @@ def init_db(db_path: Path = DB_PATH):
             pass  # column already exists
         conn.execute("CREATE INDEX IF NOT EXISTS idx_writeups_hash ON writeups(content_hash)")
 
+        # Migration: add content_cleaned flag for incremental junk checks
+        try:
+            conn.execute("ALTER TABLE writeups ADD COLUMN content_cleaned INTEGER DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass  # column already exists
+
         # Migration: add per-level signal columns to writeup_techniques
         for col in ("recognition_signals", "sub_recognition_signals",
                      "solve_steps", "sub_solve_steps"):
@@ -553,10 +559,11 @@ def clean_junk_writeups(conn: sqlite3.Connection,
                     (row["id"],))
                 cleaned += 1
 
-    # Phase 2: Re-check fetched content quality
+    # Phase 2: Re-check fetched content quality (only unchecked rows)
     rows = conn.execute("""
         SELECT id, raw_path FROM writeups
         WHERE fetch_status = 'fetched' AND raw_path IS NOT NULL
+              AND content_cleaned = 0
     """).fetchall()
 
     for row in rows:
@@ -588,6 +595,10 @@ def clean_junk_writeups(conn: sqlite3.Connection,
                 "UPDATE writeups SET fetch_status='failed', raw_path=NULL WHERE id=?",
                 (row["id"],))
             cleaned += 1
+        else:
+            conn.execute(
+                "UPDATE writeups SET content_cleaned = 1 WHERE id=?",
+                (row["id"],))
 
     return cleaned
 
