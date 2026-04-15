@@ -62,9 +62,9 @@ class BaseScraper(ABC):
     default_headers: dict = {}
     auth_header: tuple[str, str] | None = None
 
-    def __init__(self):
+    def __init__(self, quiet: bool = False):
         self.session = self._build_session()
-        self.console = Console()
+        self.console = Console(quiet=quiet)
 
     def _build_session(self) -> requests.Session:
         s = requests.Session()
@@ -99,8 +99,10 @@ class BaseScraper(ABC):
                                 item.year, item.event_url)
         challenge_id = upsert_challenge(conn, event_id, item.challenge_name,
                                         item.category)
-        return insert_writeup(conn, challenge_id, item.source, item.writeup_url,
-                              item.author, item.team) is not None
+        inserted = insert_writeup(conn, challenge_id, item.source, item.writeup_url,
+                                  item.author, item.team) is not None
+        conn.commit()
+        return inserted
 
     @abstractmethod
     def scrape(self, conn, **kwargs) -> Iterator[WriteupItem]:
@@ -120,9 +122,10 @@ class BaseScraper(ABC):
                                 description=f"{self.display_name}: {total} writeups")
         return total
 
-    def run(self, **kwargs):
+    def run(self, **kwargs) -> int:
         """Standard entry point: console header, db session, progress, totals."""
         self.console.rule(f"[bold blue]{self.display_name}")
         with db_session() as conn:
             total = self._run_phases(conn, **kwargs)
             self.console.print(f"\n[green]Done![/] {total} new writeups indexed")
+        return total

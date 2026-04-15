@@ -155,6 +155,7 @@ class CTFtimeScraper(BaseScraper):
                 if insert_writeup(conn, db_challenge_id, "ctftime", url, None, team):
                     result["writeups"] += 1
 
+        conn.commit()
         return result
 
     def _scrape_writeup_list_pages(self, conn, max_pages: int = 50) -> int:
@@ -229,6 +230,8 @@ class CTFtimeScraper(BaseScraper):
                         if insert_writeup(conn, db_challenge_id, "ctftime", writeup_url):
                             total += 1
 
+                conn.commit()
+
         self.console.print(f"Found [green]{total}[/] writeups from listing pages")
         return total
 
@@ -249,18 +252,32 @@ class CTFtimeScraper(BaseScraper):
         self.console.print("\n[bold]Phase 2:[/] Scraping individual events...")
         event_ids = self._get_recent_event_ids(max_events)
 
+        # Skip events already in DB — their writeups are already indexed
+        known_event_ids = {
+            row[0] for row in conn.execute(
+                "SELECT ctftime_id FROM events WHERE ctftime_id IS NOT NULL"
+            ).fetchall()
+        }
+        new_event_ids = [eid for eid in event_ids if eid not in known_event_ids]
+        skipped = len(event_ids) - len(new_event_ids)
+        if skipped:
+            self.console.print(
+                f"  Skipping [dim]{skipped}[/] already-indexed events, "
+                f"[green]{len(new_event_ids)}[/] new"
+            )
+
         total_challenges = 0
 
         with Progress(SpinnerColumn(), TextColumn("{task.description}"),
                       BarColumn(), console=self.console) as progress:
             task = progress.add_task(
-                f"Events: 0/{len(event_ids)} (0 writeups)", total=len(event_ids)
+                f"Events: 0/{len(new_event_ids)} (0 writeups)", total=len(new_event_ids)
             )
 
-            for i, eid in enumerate(event_ids, 1):
+            for i, eid in enumerate(new_event_ids, 1):
                 progress.update(
                     task,
-                    description=f"Events: {i}/{len(event_ids)} — event/{eid} ({total_writeups} writeups)",
+                    description=f"Events: {i}/{len(new_event_ids)} — event/{eid} ({total_writeups} writeups)",
                 )
                 result = self._scrape_event(eid, conn)
                 total_challenges += result["challenges"]
@@ -272,5 +289,5 @@ class CTFtimeScraper(BaseScraper):
         return total_writeups
 
 
-def run(max_events: int = 200):
-    CTFtimeScraper().run(max_events=max_events)
+def run(max_events: int = 200, quiet: bool = False):
+    CTFtimeScraper(quiet=quiet).run(max_events=max_events)

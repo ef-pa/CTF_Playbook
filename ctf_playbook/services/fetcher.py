@@ -5,8 +5,11 @@ and saves as plain text/markdown files in the raw-writeups directory.
 """
 
 import hashlib
+import os
 import re
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -16,7 +19,7 @@ from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn
 
 from ctf_playbook.config import FETCH_DELAY, FETCH_TIMEOUT, FETCH_MAX_SIZE, RAW_WRITEUPS_DIR
-from ctf_playbook.db import db_session, get_unfetched, mark_fetched, mark_fetch_failed
+from ctf_playbook.db import db_session, get_unfetched, mark_fetched, mark_fetch_failed, mark_fetch_retry
 
 console = Console()
 
@@ -26,18 +29,22 @@ SESSION.headers.update({
     "Accept": "text/html,text/markdown,text/plain,application/json",
 })
 
-# Track per-domain timing to be respectful
+# Track per-domain timing to be respectful (thread-safe)
+_domain_lock = threading.Lock()
 _domain_last_request: dict[str, float] = {}
 
 
 def _domain_delay(url: str):
-    """Enforce per-domain rate limiting."""
+    """Enforce per-domain rate limiting (thread-safe)."""
     domain = urlparse(url).netloc
-    last = _domain_last_request.get(domain, 0)
-    elapsed = time.time() - last
-    if elapsed < FETCH_DELAY:
-        time.sleep(FETCH_DELAY - elapsed)
-    _domain_last_request[domain] = time.time()
+    with _domain_lock:
+        last = _domain_last_request.get(domain, 0)
+        now = time.time()
+        wait = max(0, FETCH_DELAY - (now - last))
+        # Reserve our time slot so the next thread for this domain waits further
+        _domain_last_request[domain] = max(now, last + FETCH_DELAY)
+    if wait > 0:
+        time.sleep(wait)
 
 
 def _url_to_filename(url: str, challenge_name: str = "") -> str:
@@ -201,7 +208,40 @@ def fetch_writeup(url: str) -> tuple[str | None, str | None]:
     return fetch_webpage(url)
 
 
-def run(limit: int = 500):
+_PERMANENT_FAILURES = {
+    "HTTP 404", "HTTP 403", "HTTP 410", "HTTP 451",
+    "extraction failed (no readable content)",
+    "JSON without recognized content field",
+    "response too short",
+    "not a writeup (link dump or too short)",
+}
+
+
+def _is_permanent(reason: str) -> bool:
+    """Check if a failure reason is permanent (no point retrying)."""
+    if reason in _PERMANENT_FAILURES:
+        return True
+    return reason.startswith("too large")
+
+
+def _fetch_one(url: str) -> tuple[str | None, str | None]:
+    """Fetch and validate a single writeup. Returns (content, reason)."""
+    content, reason = fetch_writeup(url)
+
+    if content and not is_useful_writeup(content):
+        content, reason = None, "not a writeup (link dump or too short)"
+
+    # Retry once on transient failures
+    if not content and not _is_permanent(reason):
+        time.sleep(FETCH_DELAY)
+        content, reason = fetch_writeup(url)
+        if content and not is_useful_writeup(content):
+            content, reason = None, "not a writeup (link dump or too short)"
+
+    return content, reason
+
+
+def run(limit: int = 500, workers: int = 1):
     """Main entry point: fetch unfetched writeups and save them."""
     console.rule("[bold blue]Writeup Fetcher")
 
@@ -210,73 +250,92 @@ def run(limit: int = 500):
     with db_session() as conn:
         unfetched = get_unfetched(conn, limit=limit)
         console.print(f"Found [yellow]{len(unfetched)}[/] unfetched writeups")
+        if workers > 1:
+            console.print(f"Using [cyan]{workers}[/] concurrent workers")
 
         if not unfetched:
             console.print("[green]Nothing to fetch!")
             return
 
-        # Failure reasons that are permanent — no point retrying
-        _PERMANENT = {"HTTP 404", "HTTP 403", "HTTP 410", "HTTP 451",
-                      "extraction failed (no readable content)",
-                      "JSON without recognized content field",
-                      "response too short"}
-
         success = 0
         failed = 0
         fail_reasons: dict[str, int] = {}
+
+        def _handle_result(row, content, reason):
+            nonlocal success, failed
+            url = row["url"]
+            challenge_name = row["challenge_name"] or ""
+
+            if content:
+                filename = _url_to_filename(url, challenge_name)
+                filepath = RAW_WRITEUPS_DIR / filename
+
+                header = (
+                    f"---\n"
+                    f"source_url: {url}\n"
+                    f"event: {row['event_name']}\n"
+                    f"challenge: {challenge_name}\n"
+                    f"category: {row['category'] or 'unknown'}\n"
+                    f"year: {row['year']}\n"
+                    f"---\n\n"
+                )
+                filepath.write_text(header + content, encoding="utf-8")
+
+                content_hash = hashlib.sha256(content.strip().encode()).hexdigest()
+                mark_fetched(conn, row["id"], str(filepath), content_hash)
+                conn.commit()
+                success += 1
+            else:
+                r = reason or "unknown"
+                if _is_permanent(r):
+                    mark_fetch_failed(conn, row["id"])
+                else:
+                    mark_fetch_retry(conn, row["id"])
+                conn.commit()
+                failed += 1
+                fail_reasons[r] = fail_reasons.get(r, 0) + 1
 
         with Progress(SpinnerColumn(),
                       TextColumn("[progress.description]{task.description}"),
                       BarColumn(), console=console) as progress:
             task = progress.add_task("Fetching...", total=len(unfetched))
 
-            for row in unfetched:
-                writeup_id = row["id"]
-                url = row["url"]
-                challenge_name = row["challenge_name"] or ""
-
-                content, reason = fetch_writeup(url)
-
-                # Quality check
-                if content and not is_useful_writeup(content):
-                    content, reason = None, "not a writeup (link dump or too short)"
-
-                # Retry once on transient failures only
-                if not content and reason not in _PERMANENT:
-                    time.sleep(FETCH_DELAY)
-                    content, reason = fetch_writeup(url)
-                    if content and not is_useful_writeup(content):
-                        content, reason = None, "not a writeup (link dump or too short)"
-
-                if content:
-                    filename = _url_to_filename(url, challenge_name)
-                    filepath = RAW_WRITEUPS_DIR / filename
-
-                    header = (
-                        f"---\n"
-                        f"source_url: {url}\n"
-                        f"event: {row['event_name']}\n"
-                        f"challenge: {challenge_name}\n"
-                        f"category: {row['category'] or 'unknown'}\n"
-                        f"year: {row['year']}\n"
-                        f"---\n\n"
+            if workers <= 1:
+                for row in unfetched:
+                    content, reason = _fetch_one(row["url"])
+                    _handle_result(row, content, reason)
+                    progress.update(
+                        task, advance=1,
+                        description=f"Fetching... ({success} ok, {failed} failed)",
                     )
-                    full_content = header + content
-                    filepath.write_text(full_content, encoding="utf-8")
+            else:
+                executor = ThreadPoolExecutor(max_workers=workers)
+                interrupted = False
+                try:
+                    future_map = {}
+                    for row in unfetched:
+                        f = executor.submit(_fetch_one, row["url"])
+                        future_map[f] = row
 
-                    content_hash = hashlib.sha256(content.strip().encode()).hexdigest()
-                    mark_fetched(conn, writeup_id, str(filepath), content_hash)
-                    success += 1
-                else:
-                    mark_fetch_failed(conn, writeup_id)
-                    failed += 1
-                    reason = reason or "unknown"
-                    fail_reasons[reason] = fail_reasons.get(reason, 0) + 1
-
-                progress.update(
-                    task, advance=1,
-                    description=f"Fetching... ({success} ok, {failed} failed)"
-                )
+                    for future in as_completed(future_map):
+                        row = future_map[future]
+                        content, reason = future.result()
+                        _handle_result(row, content, reason)
+                        progress.update(
+                            task, advance=1,
+                            description=f"Fetching... ({success} ok, {failed} failed)",
+                        )
+                except KeyboardInterrupt:
+                    interrupted = True
+                    console.print("\n[yellow]Interrupted[/]")
+                finally:
+                    executor.shutdown(wait=False, cancel_futures=True)
+                    if interrupted:
+                        conn.commit()
+                        console.print(
+                            f"[green]Saved progress:[/] {success} fetched"
+                        )
+                        os._exit(130)
 
         console.print(f"\n[green]Done![/] Fetched {success}, failed {failed}")
         if fail_reasons:

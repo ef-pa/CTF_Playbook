@@ -18,6 +18,7 @@ def get_connection(db_path: Path = DB_PATH) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
+    conn.execute("PRAGMA busy_timeout=5000")
     return conn
 
 
@@ -129,6 +130,12 @@ def init_db(db_path: Path = DB_PATH):
         except sqlite3.OperationalError:
             pass  # column already exists
 
+        # Migration: add fetch_attempts counter for transient retry tracking
+        try:
+            conn.execute("ALTER TABLE writeups ADD COLUMN fetch_attempts INTEGER DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass  # column already exists
+
         # Migration: add per-level signal columns to writeup_techniques
         for col in ("recognition_signals", "sub_recognition_signals",
                      "solve_steps", "sub_solve_steps"):
@@ -226,6 +233,29 @@ def mark_fetched(conn: sqlite3.Connection, writeup_id: int, raw_path: str,
 
 def mark_fetch_failed(conn: sqlite3.Connection, writeup_id: int):
     conn.execute("UPDATE writeups SET fetch_status='failed' WHERE id=?", (writeup_id,))
+
+
+MAX_FETCH_ATTEMPTS = 3
+
+
+def mark_fetch_retry(conn: sqlite3.Connection, writeup_id: int) -> bool:
+    """Increment attempt counter for a transient failure.
+
+    Keeps fetch_status='pending' so the writeup is retried on the next run.
+    Returns True if still retryable, False if cap reached (marked failed).
+    """
+    row = conn.execute(
+        "SELECT fetch_attempts FROM writeups WHERE id=?", (writeup_id,)
+    ).fetchone()
+    attempts = (row["fetch_attempts"] or 0) + 1
+    if attempts >= MAX_FETCH_ATTEMPTS:
+        mark_fetch_failed(conn, writeup_id)
+        return False
+    conn.execute(
+        "UPDATE writeups SET fetch_attempts=? WHERE id=?",
+        (attempts, writeup_id),
+    )
+    return True
 
 
 def infer_category(techniques: list[str],

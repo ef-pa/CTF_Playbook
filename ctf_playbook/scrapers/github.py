@@ -59,10 +59,10 @@ class GitHubScraper(BaseScraper):
         "X-GitHub-Api-Version": "2022-11-28",
     }
 
-    def __init__(self):
+    def __init__(self, quiet: bool = False):
         if GITHUB_TOKEN:
             self.auth_header = ("Authorization", f"Bearer {GITHUB_TOKEN}")
-        super().__init__()
+        super().__init__(quiet=quiet)
 
     def on_error_status(self, resp: requests.Response, url: str):
         if resp.status_code == 403:
@@ -235,15 +235,37 @@ class GitHubScraper(BaseScraper):
         self.console.print("\n[bold]Phase 2:[/] Searching for more repos...")
         repos = self._search_repos(max_repos)
 
+        # Skip repos already indexed — extract known repo names from writeup URLs
+        known_repos = set()
+        rows = conn.execute(
+            "SELECT DISTINCT url FROM writeups WHERE source = 'github'"
+        ).fetchall()
+        for row in rows:
+            # URLs: https://raw.githubusercontent.com/owner/repo/branch/...
+            url = row[0]
+            prefix = "https://raw.githubusercontent.com/"
+            if url.startswith(prefix):
+                parts = url[len(prefix):].split("/")
+                if len(parts) >= 2:
+                    known_repos.add(f"{parts[0]}/{parts[1]}")
+
+        new_repos = [r for r in repos if r["full_name"] not in known_repos]
+        skipped = len(repos) - len(new_repos)
+        if skipped:
+            self.console.print(
+                f"  Skipping [dim]{skipped}[/] already-indexed repos, "
+                f"[green]{len(new_repos)}[/] new"
+            )
+
         with Progress(SpinnerColumn(), TextColumn("{task.description}"),
                       BarColumn(), console=self.console) as progress:
             task = progress.add_task(
-                f"Indexing: 0/{len(repos)} repos (0 writeups)", total=len(repos)
+                f"Indexing: 0/{len(new_repos)} repos (0 writeups)", total=len(new_repos)
             )
-            for i, repo in enumerate(repos, 1):
+            for i, repo in enumerate(new_repos, 1):
                 progress.update(
                     task,
-                    description=f"Indexing: {i}/{len(repos)} — {repo['full_name']} ({total} writeups)",
+                    description=f"Indexing: {i}/{len(new_repos)} — {repo['full_name']} ({total} writeups)",
                 )
                 n = self._index_repo(repo, conn)
                 total += n
@@ -261,5 +283,5 @@ def index_repo_writeups(repo: dict, conn) -> int:
     return GitHubScraper()._index_repo(repo, conn)
 
 
-def run(**kwargs):
-    GitHubScraper().run(**kwargs)
+def run(quiet: bool = False, **kwargs):
+    GitHubScraper(quiet=quiet).run(**kwargs)

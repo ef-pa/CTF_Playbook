@@ -40,29 +40,81 @@ def cli():
               default="all", help="Which source to scrape")
 def scrape(max_events, max_repos, max_posts, source):
     """Stage 1: Discover writeups from CTFtime, GitHub, Reddit, and blogs."""
-    if source in ("all", "ctftime"):
+    if source == "all":
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        from rich.progress import Progress, SpinnerColumn, TextColumn
+        from ctf_playbook.scrapers.ctftime import run as run_ctftime
+        from ctf_playbook.scrapers.github import run as run_github
+        from ctf_playbook.scrapers.reddit import run as run_reddit
+        from ctf_playbook.scrapers.blogs import run as run_blogs
+
+        console.print("Running [cyan]4[/] scrapers concurrently...")
+
+        scrapers = {
+            "CTFtime": lambda: run_ctftime(max_events=max_events, quiet=True),
+            "GitHub": lambda: run_github(max_repos=max_repos, quiet=True),
+            "Reddit": lambda: run_reddit(max_posts=max_posts, quiet=True),
+            "Blogs": lambda: run_blogs(quiet=True),
+        }
+        import os
+        completed = 0
+        interrupted = False
+        with Progress(SpinnerColumn(), TextColumn("{task.description}"),
+                      console=console) as progress:
+            task = progress.add_task("Scraping... (0/4 done)", total=4)
+            executor = ThreadPoolExecutor(max_workers=4)
+            try:
+                futures = {executor.submit(fn): name
+                           for name, fn in scrapers.items()}
+                for future in as_completed(futures):
+                    name = futures[future]
+                    completed += 1
+                    try:
+                        total = future.result()
+                        progress.console.print(
+                            f"  [green]{name}[/] done ({total} new writeups)"
+                        )
+                    except Exception as e:
+                        progress.console.print(
+                            f"  [red]{name} failed:[/] {e}"
+                        )
+                    progress.update(
+                        task, completed=completed,
+                        description=f"Scraping... ({completed}/4 done)",
+                    )
+            except KeyboardInterrupt:
+                interrupted = True
+                console.print("\n[yellow]Interrupted[/]")
+            finally:
+                executor.shutdown(wait=False, cancel_futures=True)
+                if interrupted:
+                    os._exit(130)
+        return
+
+    if source == "ctftime":
         from ctf_playbook.scrapers.ctftime import run as run_ctftime
         run_ctftime(max_events=max_events)
 
-    if source in ("all", "github"):
+    elif source == "github":
         from ctf_playbook.scrapers.github import run as run_github
         run_github(max_repos=max_repos)
 
-    if source in ("all", "reddit"):
+    elif source == "reddit":
         from ctf_playbook.scrapers.reddit import run as run_reddit
         run_reddit(max_posts=max_posts)
 
-    if source in ("all", "blogs"):
+    elif source == "blogs":
         from ctf_playbook.scrapers.blogs import run as run_blogs
         run_blogs()
 
 
 @cli.command()
 @click.option("--limit", default=500, help="Max writeups to fetch")
-def fetch(limit):
+@click.option("--workers", "-w", default=4, help="Concurrent fetch workers (1=sequential)")
+def fetch(limit, workers):
     """Stage 2: Download writeup content from discovered URLs."""
     from ctf_playbook.services.fetcher import run as run_fetcher
-    run_fetcher(limit=limit)
+    run_fetcher(limit=limit, workers=workers)
 
 
 @cli.command()

@@ -130,5 +130,5 @@ class BlogScraper(BaseScraper):
                 )
 
 
-def run(**kwargs):
-    BlogScraper().run(**kwargs)
+def run(quiet: bool = False, **kwargs):
+    BlogScraper(quiet=quiet).run(**kwargs)

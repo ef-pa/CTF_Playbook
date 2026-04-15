@@ -109,5 +109,5 @@ class RedditScraper(BaseScraper):
             yield from self._search_subreddit(sub, max_posts)
 
 
-def run(**kwargs):
-    RedditScraper().run(**kwargs)
+def run(quiet: bool = False, **kwargs):
+    RedditScraper(quiet=quiet).run(**kwargs)
