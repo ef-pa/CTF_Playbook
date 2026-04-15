@@ -164,20 +164,22 @@ def _dedup_consensus_steps(steps: list[str],
     return keep
 
 
-def _merge_solve_steps(step_lists: list[list[str]], max_steps: int = 7) -> list[str]:
+def _merge_solve_steps(step_lists: list[list[str]],
+                       max_steps: int = 7) -> tuple[list[str], bool]:
     """Merge multiple solve step lists into a generalized flow.
 
     First deduplicates near-identical steps (substring, fuzzy matching),
     then uses frequency and positional analysis: steps that appear across
     multiple writeups are preferred, ordered by their average position.
-    For 1-2 writeups, falls back to the longest list when consensus is
-    insufficient. For 3+ writeups without consensus, returns empty (diverse
-    approaches mean no single flow is representative).
+    Falls back to the longest individual list when consensus is insufficient.
+
+    Returns (steps, is_consensus) where is_consensus indicates whether the
+    steps came from cross-writeup agreement or a single-writeup fallback.
     """
     if not step_lists:
-        return []
+        return ([], False)
     if len(step_lists) == 1:
-        return step_lists[0][:max_steps]
+        return (step_lists[0][:max_steps], False)
 
     # Dedup near-identical steps across all lists
     all_steps = [step for steps in step_lists for step in steps]
@@ -203,15 +205,11 @@ def _merge_solve_steps(step_lists: list[list[str]], max_steps: int = 7) -> list[
         # Sort by average position for natural ordering
         consensus.sort(key=lambda s: s["total_pos"] / s["count"])
         steps = [s["original"] for s in consensus[:max_steps]]
-        return _dedup_consensus_steps(steps)
+        return (_dedup_consensus_steps(steps), True)
 
-    # Low data (2 writeups): fall back to longest list
-    if len(step_lists) <= 2:
-        longest = max(canon_lists, key=len)
-        return longest[:max_steps]
-
-    # 3+ writeups but no consensus — don't show misleading steps
-    return []
+    # Not enough consensus — fall back to longest individual list
+    longest = max(canon_lists, key=len)
+    return (longest[:max_steps], False)
 
 
 def _normalize_signal(signal: str) -> str:
@@ -457,7 +455,7 @@ def _serialize_technique(slug: str, data: dict,
     top_tools = sorted(merged_tools.items(), key=lambda x: -x[1])[:15]
     top_diff = (max(data["difficulties"].items(), key=lambda x: x[1])[0]
                 if data["difficulties"] else "medium")
-    merged_steps = _merge_solve_steps(data["steps"])
+    merged_steps, is_consensus = _merge_solve_steps(data["steps"])
 
     result = {
         "difficulty": top_diff,
@@ -467,6 +465,7 @@ def _serialize_technique(slug: str, data: dict,
         ],
         "tools": [{"tool": t, "count": c} for t, c in top_tools],
         "solve_steps": merged_steps,
+        "solve_steps_from_consensus": is_consensus,
         "examples": sorted(
             data["examples"], key=lambda x: x["year"] or 0, reverse=True
         ),
@@ -613,7 +612,10 @@ def _render_pattern_content(slug: str, tech: dict) -> str:
 
     # Only show solve steps for techniques without sub-techniques
     if tech["solve_steps"] and not tech.get("sub_techniques"):
-        lines += ["", "## Common Solve Steps", ""]
+        if tech.get("solve_steps_from_consensus"):
+            lines += ["", "## Common Solve Steps", ""]
+        else:
+            lines += ["", "## Example Solve Steps", ""]
         for i, step in enumerate(tech["solve_steps"], 1):
             lines.append(f"{i}. {step}")
 

@@ -17,95 +17,102 @@ from ctf_playbook.services.builder import (
 
 class TestMergeSolveSteps:
     def test_empty(self):
-        assert _merge_solve_steps([]) == []
+        steps, is_consensus = _merge_solve_steps([])
+        assert steps == []
+        assert is_consensus is False
 
     def test_single_writeup(self):
-        steps = [["find vuln", "exploit", "get flag"]]
-        assert _merge_solve_steps(steps) == ["find vuln", "exploit", "get flag"]
+        steps, is_consensus = _merge_solve_steps([["find vuln", "exploit", "get flag"]])
+        assert steps == ["find vuln", "exploit", "get flag"]
+        assert is_consensus is False
 
     def test_single_writeup_truncates(self):
         long_steps = [["step"] * 10]
-        result = _merge_solve_steps(long_steps, max_steps=5)
-        assert len(result) == 5
+        steps, _ = _merge_solve_steps(long_steps, max_steps=5)
+        assert len(steps) == 5
 
     def test_consensus_preferred(self):
         """Steps appearing in 2+ writeups should be selected over unique steps."""
-        steps = [
+        data = [
             ["find vuln", "calculate offset", "build exploit", "get flag"],
             ["find vuln", "calculate offset", "craft payload", "get flag"],
             ["find vuln", "calculate offset", "write exploit", "get flag"],
         ]
-        result = _merge_solve_steps(steps)
+        steps, is_consensus = _merge_solve_steps(data)
         # "find vuln", "calculate offset", and "get flag" appear in all 3
-        assert "find vuln" in result
-        assert "calculate offset" in result
-        assert "get flag" in result
+        assert "find vuln" in steps
+        assert "calculate offset" in steps
+        assert "get flag" in steps
+        assert is_consensus is True
 
     def test_consensus_ordered_by_position(self):
         """Consensus steps should be ordered by their average position."""
-        steps = [
+        data = [
             ["step A", "step B", "step C"],
             ["step A", "step B", "step C"],
         ]
-        result = _merge_solve_steps(steps)
-        assert result == ["step A", "step B", "step C"]
+        steps, _ = _merge_solve_steps(data)
+        assert steps == ["step A", "step B", "step C"]
 
-    def test_returns_empty_when_no_consensus_3plus_writeups(self):
-        """With 3+ writeups and no consensus, return empty (diverse approaches)."""
-        steps = [
+    def test_fallback_to_longest_when_no_consensus(self):
+        """With 3+ writeups and no consensus, fall back to longest list."""
+        data = [
             ["unique-a1", "unique-a2"],
             ["unique-b1", "unique-b2", "unique-b3", "unique-b4"],
             ["unique-c1"],
         ]
-        result = _merge_solve_steps(steps)
-        assert result == []
+        steps, is_consensus = _merge_solve_steps(data)
+        assert len(steps) == 4  # longest list
+        assert is_consensus is False
 
     def test_case_insensitive_dedup(self):
         """Matching should be case-insensitive."""
-        steps = [
+        data = [
             ["Find vulnerability", "Exploit"],
             ["find vulnerability", "exploit"],
         ]
-        result = _merge_solve_steps(steps)
-        assert len(result) == 2
+        steps, _ = _merge_solve_steps(data)
+        assert len(steps) == 2
 
     def test_max_steps_caps_consensus(self):
         """Consensus output should be capped at max_steps."""
         common = [f"step {i}" for i in range(10)]
-        steps = [common, common, common]
-        result = _merge_solve_steps(steps, max_steps=5)
-        assert len(result) == 5
+        data = [common, common, common]
+        steps, is_consensus = _merge_solve_steps(data, max_steps=5)
+        assert len(steps) == 5
+        assert is_consensus is True
 
     def test_two_writeups_partial_overlap(self):
         """Two writeups with some shared steps and some unique."""
-        steps = [
+        data = [
             ["decompile binary", "find overflow", "write exploit"],
             ["checksec binary", "find overflow", "build rop chain", "write exploit"],
         ]
-        result = _merge_solve_steps(steps)
+        steps, is_consensus = _merge_solve_steps(data)
         # "find overflow" and "write exploit" appear twice = consensus
         # Only 2 consensus steps < 3, so falls back to longest
-        assert len(result) == 4  # longest list has 4 steps
+        assert len(steps) == 4  # longest list has 4 steps
+        assert is_consensus is False
 
     def test_near_duplicate_steps_merged(self):
         """Steps that differ only by articles/prepositions should merge."""
-        steps = [
+        data = [
             ["load binary into disassembler/decompiler"],
             ["Load the binary into a disassembler or decompiler"],
         ]
-        result = _merge_solve_steps(steps)
-        assert len(result) == 1
+        steps, _ = _merge_solve_steps(data)
+        assert len(steps) == 1
 
     def test_distinct_steps_not_merged(self):
         """Steps with different semantics should remain separate."""
-        steps = [
+        data = [
             ["analyze the binary for vulnerabilities", "run the exploit"],
             ["analyze the binary for vulnerabilities", "patch the binary"],
         ]
-        result = _merge_solve_steps(steps)
+        steps, _ = _merge_solve_steps(data)
         # "analyze the binary" appears in both — consensus
         # "run the exploit" and "patch the binary" are distinct
-        assert any("analyze" in s for s in result)
+        assert any("analyze" in s for s in steps)
 
 
 # ── _dedup_step_strings ─────────────────────────────────────────────────

@@ -74,7 +74,8 @@ async function runIdentify() {
 
             let stepsHtml = '';
             if (m.solve_steps && m.solve_steps.length) {
-                stepsHtml = '<h4>Common Solve Steps</h4><ol class="solve-steps compact">';
+                var stepsLabel = m.solve_steps_from_consensus ? 'Common Solve Steps' : 'Example Solve Steps';
+                stepsHtml = '<h4>' + stepsLabel + '</h4><ol class="solve-steps compact">';
                 for (const step of m.solve_steps.slice(0, 5)) {
                     stepsHtml += '<li>' + escapeHtml(step) + '</li>';
                 }

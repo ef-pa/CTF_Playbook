@@ -44,7 +44,12 @@
 
 {% if tech.solve_steps and not tech.sub_techniques %}
 <section class="card">
+    {% if tech.solve_steps_from_consensus %}
     <h2>Common Solve Steps</h2>
+    {% else %}
+    <h2>Example Solve Steps</h2>
+    <p class="section-hint">From a single writeup — your approach may differ.</p>
+    {% endif %}
     <ol class="solve-steps">
         {% for step in tech.solve_steps %}
         <li>{{ step }}</li>
@@ -99,7 +104,7 @@
             {% endif %}
 
             {% if sub.solve_steps %}
-            <h4>Common Solve Steps</h4>
+            <h4>{% if sub.solve_steps_from_consensus %}Common Solve Steps{% else %}Example Solve Steps{% endif %}</h4>
             <ol class="solve-steps compact">
                 {% for step in sub.solve_steps %}
                 <li>{{ step }}</li>

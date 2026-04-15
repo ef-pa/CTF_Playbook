@@ -40,6 +40,7 @@ class MatchResult:
     difficulty: str = "medium"
     tools: list[str] = field(default_factory=list)
     solve_steps: list[str] = field(default_factory=list)
+    solve_steps_from_consensus: bool = False
     sub_technique: str | None = None
     example_count: int = 0
 
@@ -160,11 +161,14 @@ class ChallengeMatcher:
 
             # Use sub-technique solve_steps when available
             solve_steps = tech.get("solve_steps", [])
+            steps_from_consensus = tech.get("solve_steps_from_consensus", False)
             if best_sub:
                 sub_tech = tech.get("sub_techniques", {}).get(best_sub, {})
                 sub_steps = sub_tech.get("solve_steps", [])
                 if sub_steps:
                     solve_steps = sub_steps
+                    steps_from_consensus = sub_tech.get(
+                        "solve_steps_from_consensus", False)
 
             results.append(MatchResult(
                 technique=slug,
@@ -174,6 +178,7 @@ class ChallengeMatcher:
                 difficulty=tech.get("difficulty", "medium"),
                 tools=[t["tool"] for t in tech.get("tools", [])[:5]],
                 solve_steps=solve_steps,
+                solve_steps_from_consensus=steps_from_consensus,
                 sub_technique=best_sub,
                 example_count=tech.get("example_count", 0),
             ))
