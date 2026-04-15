@@ -129,6 +129,41 @@ def _dedup_step_strings(steps: list[str],
     return result
 
 
+def _dedup_consensus_steps(steps: list[str],
+                           threshold: float = 0.60) -> list[str]:
+    """Remove near-duplicate steps from the final consensus output.
+
+    Uses a lower similarity threshold than the pre-consensus dedup because
+    we're comparing only 3-7 vetted steps, not hundreds of raw steps.
+    Keeps the first (earliest position) of each duplicate group.
+    """
+    if len(steps) <= 1:
+        return steps
+    keep = []
+    for step in steps:
+        norm = _normalize_signal(step)
+        is_dup = False
+        for kept in keep:
+            kept_norm = _normalize_signal(kept)
+            # Substring check
+            if norm in kept_norm or kept_norm in norm:
+                is_dup = True
+                break
+            # Fuzzy check — only on longer strings where it's reliable
+            # Take max of both orderings since SequenceMatcher is asymmetric
+            if len(norm) >= 20 and len(kept_norm) >= 20:
+                ratio = max(
+                    SequenceMatcher(None, norm, kept_norm).ratio(),
+                    SequenceMatcher(None, kept_norm, norm).ratio(),
+                )
+                if ratio >= threshold:
+                    is_dup = True
+                    break
+        if not is_dup:
+            keep.append(step)
+    return keep
+
+
 def _merge_solve_steps(step_lists: list[list[str]], max_steps: int = 7) -> list[str]:
     """Merge multiple solve step lists into a generalized flow.
 
@@ -167,7 +202,8 @@ def _merge_solve_steps(step_lists: list[list[str]], max_steps: int = 7) -> list[
     if len(consensus) >= 3:
         # Sort by average position for natural ordering
         consensus.sort(key=lambda s: s["total_pos"] / s["count"])
-        return [s["original"] for s in consensus[:max_steps]]
+        steps = [s["original"] for s in consensus[:max_steps]]
+        return _dedup_consensus_steps(steps)
 
     # Low data (2 writeups): fall back to longest list
     if len(step_lists) <= 2:

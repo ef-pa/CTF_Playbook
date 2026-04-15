@@ -2,7 +2,14 @@
 {% block content %}
 <h1>CTF Playbook</h1>
 {% if generated_at %}
-<p class="section-hint">Playbook generated {{ generated_at[:10] }}</p>
+<p class="section-hint">Playbook generated <span id="gen-time">{{ generated_at[:19] | replace("T", " ") }} UTC</span></p>
+<script>
+(function() {
+    var el = document.getElementById('gen-time');
+    var d = new Date('{{ generated_at }}');
+    if (!isNaN(d)) el.textContent = d.toLocaleString();
+})();
+</script>
 {% endif %}
 
 <div class="stats-grid">
