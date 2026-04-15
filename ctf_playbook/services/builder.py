@@ -15,6 +15,7 @@ from itertools import combinations
 from pathlib import Path
 
 from rich.console import Console
+from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, MofNCompleteColumn
 
 from ctf_playbook.taxonomy import TAXONOMY, get_sub_techniques, infer_category_from_slug
 from ctf_playbook.config import PLAYBOOK_DIR
@@ -536,12 +537,21 @@ def build_playbook_data() -> dict | None:
 
     # Serialize every technique into a clean, JSON-safe dict
     techniques: dict[str, dict] = {}
-    for slug, data in technique_data.items():
-        cat = _find_parent_category(slug) or "misc"
-        tech = _serialize_technique(slug, data, sub_technique_data.get(slug))
-        tech["category"] = cat
-        tech["cross_references"] = cross_refs.get(slug, [])
-        techniques[slug] = tech
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        console=console,
+    ) as progress:
+        task = progress.add_task("Serializing techniques", total=len(technique_data))
+        for slug, data in technique_data.items():
+            cat = _find_parent_category(slug) or "misc"
+            tech = _serialize_technique(slug, data, sub_technique_data.get(slug))
+            tech["category"] = cat
+            tech["cross_references"] = cross_refs.get(slug, [])
+            techniques[slug] = tech
+            progress.advance(task)
 
     recon = _assemble_recon_patterns(techniques)
     tools = _assemble_tool_reference(techniques)
@@ -656,46 +666,56 @@ def _render_pattern_content(slug: str, tech: dict) -> str:
 def _render_technique_files(techniques: dict):
     """Write _pattern.md and sub-technique .md files for every technique."""
     sub_file_count = 0
-    for slug, tech in techniques.items():
-        cat = tech["category"]
-        tech_dir = TECHNIQUES_DIR / cat / slug
-        tech_dir.mkdir(parents=True, exist_ok=True)
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        console=console,
+    ) as progress:
+        task = progress.add_task("Writing technique files", total=len(techniques))
+        for slug, tech in techniques.items():
+            cat = tech["category"]
+            tech_dir = TECHNIQUES_DIR / cat / slug
+            tech_dir.mkdir(parents=True, exist_ok=True)
 
-        content = _render_pattern_content(slug, tech)
+            content = _render_pattern_content(slug, tech)
 
-        # Append sub-technique table if any exist
-        subs = tech.get("sub_techniques", {})
-        if subs:
-            sub_lines = [
-                "",
-                "## Sub-Techniques",
-                "",
-            ]
-            if len(subs) >= 2:
-                sub_lines.append(
-                    "See the [decision tree](_recon.md) to identify "
-                    "which variant applies."
-                )
+            # Append sub-technique table if any exist
+            subs = tech.get("sub_techniques", {})
+            if subs:
+                sub_lines = [
+                    "",
+                    "## Sub-Techniques",
+                    "",
+                ]
+                if len(subs) >= 2:
+                    sub_lines.append(
+                        "See the [decision tree](_recon.md) to identify "
+                        "which variant applies."
+                    )
+                    sub_lines.append("")
+                sub_lines += [
+                    "| Sub-Technique | Writeups | Typical Difficulty |",
+                    "|---|---|---|",
+                ]
+                for sub_slug, sub_data in subs.items():
+                    sub_lines.append(
+                        f"| [{_slug_to_title(sub_slug)}]({sub_slug}.md) "
+                        f"| {sub_data['example_count']} | {sub_data['difficulty']} |"
+                    )
                 sub_lines.append("")
-            sub_lines += [
-                "| Sub-Technique | Writeups | Typical Difficulty |",
-                "|---|---|---|",
-            ]
+                content += "\n" + "\n".join(sub_lines)
+
+            (tech_dir / "_pattern.md").write_text(content, encoding="utf-8")
+
+            # Individual sub-technique files
             for sub_slug, sub_data in subs.items():
-                sub_lines.append(
-                    f"| [{_slug_to_title(sub_slug)}]({sub_slug}.md) "
-                    f"| {sub_data['example_count']} | {sub_data['difficulty']} |"
-                )
-            sub_lines.append("")
-            content += "\n" + "\n".join(sub_lines)
+                sub_content = _render_pattern_content(sub_slug, sub_data)
+                (tech_dir / f"{sub_slug}.md").write_text(sub_content, encoding="utf-8")
+                sub_file_count += 1
 
-        (tech_dir / "_pattern.md").write_text(content, encoding="utf-8")
-
-        # Individual sub-technique files
-        for sub_slug, sub_data in subs.items():
-            sub_content = _render_pattern_content(sub_slug, sub_data)
-            (tech_dir / f"{sub_slug}.md").write_text(sub_content, encoding="utf-8")
-            sub_file_count += 1
+            progress.advance(task)
 
     console.print(
         f"Built pattern files for [green]{len(techniques)}[/] techniques"
